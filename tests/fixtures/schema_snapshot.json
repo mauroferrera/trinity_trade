@@ -1,0 +1,841 @@
+{
+  "_comment": "Esquema de la DB REAL de produccion (REF/trading.db, 2026-10-01). Generado con scripts-free: sqlite3 + PRAGMA table_info. NO editar a mano; se compara en tests/unit/test_schema.py.",
+  "tables": {
+    "agent_settings": {
+      "columns": {
+        "key": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "TEXT"
+        },
+        "value": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        }
+      },
+      "indexes": []
+    },
+    "chart_alerts": {
+      "columns": {
+        "conditions": {
+          "default": "'[]'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "created_at": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "expires_at": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "id": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "INTEGER"
+        },
+        "label": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "last_check": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "price": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "side": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "status": {
+          "default": "'active'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "symbol": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "timeframe": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "triggered_at": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        }
+      },
+      "indexes": []
+    },
+    "chart_drawings": {
+      "columns": {
+        "drawings_json": {
+          "default": "'[]'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "symbol": {
+          "default": null,
+          "notnull": 1,
+          "pk": 1,
+          "type": "TEXT"
+        },
+        "timeframe": {
+          "default": "'M15'",
+          "notnull": 1,
+          "pk": 2,
+          "type": "TEXT"
+        },
+        "updated_at": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        }
+      },
+      "indexes": []
+    },
+    "conversations": {
+      "columns": {
+        "created_at": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "id": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "TEXT"
+        },
+        "role_id": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "title": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "updated_at": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        }
+      },
+      "indexes": []
+    },
+    "cot_reports": {
+      "columns": {
+        "am_net": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "INTEGER"
+        },
+        "cot_index_26w": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "created_at": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "delta_am": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "delta_lf": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "lf_net": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "INTEGER"
+        },
+        "macro_bias": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "nc_net": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "INTEGER"
+        },
+        "report_date": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "TEXT"
+        }
+      },
+      "indexes": []
+    },
+    "journal": {
+      "columns": {
+        "action": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "cme_confirmation": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "conversation_id": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "emotion": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "entry_price": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "id": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "INTEGER"
+        },
+        "liquidity_swept": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "notes": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "plan_compliance": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "INTEGER"
+        },
+        "poi_type": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "setup_json": {
+          "default": "'{}'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "sl_price": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "symbol": {
+          "default": "'EURUSD'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "tags": {
+          "default": "'[]'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "ticket": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "time_close": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "time_open": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "timestamp": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "tp_price": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        }
+      },
+      "indexes": [
+        "idx_journal_time"
+      ]
+    },
+    "messages": {
+      "columns": {
+        "content": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "conversation_id": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "id": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "INTEGER"
+        },
+        "name": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "role": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "timestamp": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "tool_call_id": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        }
+      },
+      "indexes": [
+        "idx_messages_conv"
+      ]
+    },
+    "prop_state": {
+      "columns": {
+        "key": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "TEXT"
+        },
+        "value": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        }
+      },
+      "indexes": []
+    },
+    "roles": {
+      "columns": {
+        "active": {
+          "default": "1",
+          "notnull": 1,
+          "pk": 0,
+          "type": "INTEGER"
+        },
+        "allowed_tools": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "id": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "TEXT"
+        },
+        "model": {
+          "default": "''",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "name": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "provider": {
+          "default": "'auto'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "system_prompt": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "updated_at": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        }
+      },
+      "indexes": []
+    },
+    "setup_log": {
+      "columns": {
+        "breakdown_json": {
+          "default": "'{}'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "context_json": {
+          "default": "'{}'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "direction": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "entry": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "id": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "INTEGER"
+        },
+        "invalidate_level": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "reject_reasons": {
+          "default": "'[]'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "risk_state_json": {
+          "default": "'{}'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "score": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "sl": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "snapshot_age_s": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "source": {
+          "default": "''",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "symbol": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "target": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "timeframe": {
+          "default": "'M15'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "timestamp": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "trade_result_json": {
+          "default": "'{}'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "validated": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "INTEGER"
+        },
+        "verdict": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        }
+      },
+      "indexes": [
+        "idx_setup_log_age",
+        "idx_setup_log_time",
+        "idx_setup_log_verdict"
+      ]
+    },
+    "setup_state": {
+      "columns": {
+        "auto_executed": {
+          "default": "0",
+          "notnull": 1,
+          "pk": 0,
+          "type": "INTEGER"
+        },
+        "created_at": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "direction": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "entry": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "invalidate_level": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "notified": {
+          "default": "0",
+          "notnull": 1,
+          "pk": 0,
+          "type": "INTEGER"
+        },
+        "score": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "sl": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "status": {
+          "default": "'active'",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "symbol": {
+          "default": null,
+          "notnull": 1,
+          "pk": 1,
+          "type": "TEXT"
+        },
+        "target": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "timeframe": {
+          "default": "'M15'",
+          "notnull": 1,
+          "pk": 2,
+          "type": "TEXT"
+        },
+        "updated_at": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "verdict": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        }
+      },
+      "indexes": []
+    },
+    "trade_excursions": {
+      "columns": {
+        "best_price": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "direction": {
+          "default": "''",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "first_seen": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "price_open": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "samples": {
+          "default": "0",
+          "notnull": 1,
+          "pk": 0,
+          "type": "INTEGER"
+        },
+        "symbol": {
+          "default": "''",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "ticket": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "INTEGER"
+        },
+        "updated_at": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "worst_price": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        }
+      },
+      "indexes": []
+    },
+    "trades": {
+      "columns": {
+        "action": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "commission": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "exit_reason": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "INTEGER"
+        },
+        "id": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "INTEGER"
+        },
+        "price_close": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "price_open": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "profit": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "swap": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "symbol": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "synced_at": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "ticket": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "INTEGER"
+        },
+        "time_close": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        "time_open": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        "volume": {
+          "default": null,
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        }
+      },
+      "indexes": [
+        "idx_trades_time"
+      ]
+    },
+    "watcher_settings": {
+      "columns": {
+        "key": {
+          "default": null,
+          "notnull": 0,
+          "pk": 1,
+          "type": "TEXT"
+        },
+        "value": {
+          "default": null,
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        }
+      },
+      "indexes": []
+    }
+  }
+}
