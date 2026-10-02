@@ -1,0 +1,27 @@
+# Normalizar fin de linea: LF en el repositorio, nativo en el working tree de Windows.
+* text=auto
+
+*.py   text eol=lf
+*.md   text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.json text eol=lf
+*.ini  text eol=lf
+*.cfg  text eol=lf
+*.sql  text eol=lf
+*.txt  text eol=lf
+*.html text eol=lf
+*.css  text eol=lf
+*.js   text eol=lf
+
+# Scripts de Windows necesitan CRLF
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Binarios
+*.db   binary
+*.png  binary
+*.jpg  binary
+*.pdf  binary
+*.xlsx binary

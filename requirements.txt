@@ -1,0 +1,54 @@
+# ===================================
+# MultiMarket Quant Engine - Requirements
+# ===================================
+
+# Core API & Web
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.2
+python-multipart==0.0.17
+websockets==14.1
+
+# Config & Data
+PyYAML==6.0.2
+python-dotenv==1.0.1
+aiofiles==24.1.0
+
+# Data Processing
+numpy==2.1.3
+pandas==2.2.3
+
+# HTTP Clients
+httpx==0.28.1
+requests==2.32.3
+aiohttp==3.11.10
+
+# Trading / Brokers
+MetaTrader5==5.0.4833
+databento==0.54.0
+
+# Crypto Exchanges
+ccxt==4.4.47
+
+# AI / LLM
+litellm==1.53.7
+
+# Database
+SQLAlchemy==2.0.36
+# psycopg2-binary==2.9.10  # PostgreSQL (futuro)
+
+# Utils & Scheduling
+python-dateutil==2.9.0.post0
+pytz==2024.2
+tenacity==9.0.0
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+responses==0.25.3
+
+# Dev Tools
+black==24.10.0
+ruff==0.8.3
+mypy==1.13.0

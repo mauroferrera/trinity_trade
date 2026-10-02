@@ -1,0 +1,1 @@
+"""Tests de integracion con dobles de prueba."""

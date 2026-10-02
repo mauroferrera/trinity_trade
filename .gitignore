@@ -1,0 +1,63 @@
+# --- Placeholder de OneDrive: nunca debe existir contenido real aqui ---
+# El codigo de referencia vive fuera del repo, en C:\Users\fmaur\Desktop\Trading (solo lectura).
+Trading/
+Desktop/
+Downloads/
+Documents/
+
+# Secretos y configuracion local
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Datos locales: las DB se regeneran desde schema.sql, no se versionan
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+*.backup-*
+backups/
+data/
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+.tox/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+nosetests.xml
+
+# Ref: REF/ es solo lectura, nunca se copia dentro del repo
+_ref/
+_ref_copy/
+
+# IDE / SO
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+desktop.ini
+.DS_Store

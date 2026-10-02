@@ -1,0 +1,135 @@
+# ===================================
+# asset_sources_map.yaml
+# Mapeo dinámico de fuentes por activo/mercado
+# Orquesta qué adaptadores y servicios macro/blandos se activan por símbolo
+# ===================================
+
+# ================================
+# MERCADO BRASIL (B3) - FUTUROS
+# ================================
+WDO_FUTURES:
+  market_type: "B3_FUTURES"
+  exchange: "B3"
+  symbol: "WDO"
+  timeframe: "M15"
+  # Ventanas/liquidez: config/trading_hours.json -> sessions.b3_mini_usd
+  session_id: "b3_mini_usd"
+  data_adapter: "mt5_b3"  # mt5_b3 | nelogica_profit | cedro_technologies
+  lot_calculator: "b3_mini_contracts"
+  soft_data_sources:
+    - bcb_focus           # Boletim Focus (IPCA/SELIC)
+    - foreigner_flow      # Flujo de capital extranjero B3
+    - di_futures_yield    # Curva de tasas DI1
+    - news_blackout       # Copom / Eventos fiscales
+  technical_engines:
+    - smc_engine
+    - orderflow_engine
+
+WIN_FUTURES:
+  market_type: "B3_FUTURES"
+  exchange: "B3"
+  symbol: "WIN"
+  timeframe: "M15"
+  # Ventanas/liquidez: config/trading_hours.json -> sessions.b3_mini_index
+  session_id: "b3_mini_index"
+  data_adapter: "mt5_b3"
+  lot_calculator: "b3_mini_contracts"
+  soft_data_sources:
+    - bcb_focus
+    - foreigner_flow
+    - di_futures_yield
+    - news_blackout
+  technical_engines:
+    - smc_engine
+    - orderflow_engine
+
+DI1_FUTURES:
+  market_type: "B3_FUTURES"
+  exchange: "B3"
+  symbol: "DI1"
+  timeframe: "H1"
+  # Ventanas/liquidez: config/trading_hours.json -> sessions.b3_rates
+  session_id: "b3_rates"
+  data_adapter: "mt5_b3"
+  lot_calculator: "b3_mini_contracts"
+  soft_data_sources:
+    - bcb_focus
+    - di_futures_yield
+  technical_engines:
+    - smc_engine
+
+# ================================
+# MERCADO BRASIL (B3) - BONOS
+# ================================
+NTN_F_BONDS:
+  market_type: "B3_TESOURO"
+  exchange: "B3_TESOURO"
+  symbol: "NTNF"
+  timeframe: "H1"
+  # Ventanas/liquidez: config/trading_hours.json -> sessions.b3_fixed_income
+  session_id: "b3_fixed_income"
+  data_adapter: "mt5_b3"
+  lot_calculator: "b3_bonds"
+  soft_data_sources:
+    - bcb_focus
+    - di_futures_yield
+  technical_engines:
+    - smc_engine
+
+# ================================
+# MERCADO FOREX / CME
+# ================================
+EURUSD:
+  market_type: "FOREX_SPOT"
+  exchange: "FOREX"
+  symbol: "EURUSD"
+  timeframe: "M15"
+  # Ventanas/liquidez: config/trading_hours.json -> sessions.forex_spot
+  session_id: "forex_spot"
+  data_adapter: "mt5_forex"  # mt5_forex | databento_cme
+  lot_calculator: "standard_forex_lots"
+  soft_data_sources:
+    - cot_report          # CFTC COT
+    - dxy_correlation     # Correlación DXY
+    - ecb_fed_calendar    # NFP/FOMC/ECB
+  technical_engines:
+    - smc_engine
+    - orderflow_engine
+
+# ================================
+# MERCADO CRIPTO
+# ================================
+BTCUSDT:
+  market_type: "CRYPTO_PERPETUAL"
+  exchange: "BINANCE"
+  symbol: "BTCUSDT"
+  timeframe: "M15"
+  # Ventanas/liquidez: config/trading_hours.json -> sessions.crypto_24x7
+  session_id: "crypto_24x7"
+  data_adapter: "binance_ws"  # binance_ws | bybit_ccxt
+  lot_calculator: "crypto_notional_usdt"
+  soft_data_sources:
+    - fear_and_greed_index
+    - crypto_onchain_whales
+    - funding_rate_monitor
+    - liquidation_heatmap
+  technical_engines:
+    - smc_engine
+    - orderflow_engine
+
+ETHUSDT:
+  market_type: "CRYPTO_PERPETUAL"
+  exchange: "BINANCE"
+  symbol: "ETHUSDT"
+  timeframe: "M15"
+  # Ventanas/liquidez: config/trading_hours.json -> sessions.crypto_24x7
+  session_id: "crypto_24x7"
+  data_adapter: "binance_ws"  # binance_ws | bybit_ccxt
+  lot_calculator: "crypto_notional_usdt"
+  soft_data_sources:
+    - fear_and_greed_index
+    - funding_rate_monitor
+    - liquidation_heatmap
+  technical_engines:
+    - smc_engine
+    - orderflow_engine

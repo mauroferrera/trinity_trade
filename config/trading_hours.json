@@ -1,0 +1,334 @@
+{
+  "meta": {
+    "name": "Trading Hours & Session Calendar",
+    "version": "1.0.0",
+    "last_updated": "2026-10-01",
+    "purpose": "Define janelas de negociação, sessões, sobreposições e perfis de liquidez por mercado/grupo de instrumentos. Consumido pelos serviços de calendário; o core segue agnóstico (recebe apenas dados normalizados).",
+    "dst_policy": "As janelas são expressas em hora local do exchange, com timezone IANA. O offset UTC é informativo e recalculado por zoneinfo a cada avaliação (DST aplicado automaticamente).",
+    "weekdays": {
+      "0": "sunday",
+      "1": "monday",
+      "2": "tuesday",
+      "3": "wednesday",
+      "4": "thursday",
+      "5": "friday",
+      "6": "saturday"
+    },
+    "confidence_levels": {
+      "high": "Confirmado em fonte oficial do exchange.",
+      "medium": "Confirmado em fonte secundária (broker / tabela de sessões).",
+      "unverified": "Pendente de verificação contra a grade oficial. Não usar em execução de produção até verificar."
+    },
+    "sources": [
+      "B3 - Ofício Circular 043/2025-VNC (novos horários de negociação, derivativos)",
+      "B3 - Ofício Circular 005/2026-PRE (grade derivativos vigente desde 09/03/2026)",
+      "B3 - Horário de negociação | Taxas de juros (FUT DI1)",
+      "B3 - Ofício Circular 017/2025-VNC (janelas de apuração de preço de ajuste)",
+      "B3 - Tesouro Direto, Informações técnicas",
+      "Babypips / Dukascopy / DailyForex - tabelas de sessões FX em UTC"
+    ]
+  },
+  "liquidity_profile": {
+    "deep": "Spread mínimo, slippage baixo. Janela preferida para execução.",
+    "normal": "Liquidez padrão da sessão.",
+    "thin": "Livro raso / spread longo. Permitir entradas apenas com tamanho reduzido ou filtro adicional.",
+    "dead": "Sem liquidez relevante. Não gerar novas entradas."
+  },
+  "news_blackout_defaults": {
+    "minutes_before": 15,
+    "minutes_after": 15,
+    "action": "block_new_entries",
+    "allow_exits": true,
+    "note": "O blackout por evento é calculado no macro_ingestor (calendário de notícias), não neste arquivo."
+  },
+  "markets": {
+    "B3_FUTURES": {
+      "display_name": "B3 Futuros",
+      "timezone": "America/Sao_Paulo",
+      "utc_offset_standard": "-03:00",
+      "has_dst": false,
+      "trading_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+      "holidays_source": "Calendario oficial B3 (actualizar manualmente cada ano).",
+      "holidays_source_url": "https://www.b3.com.br/pt_br/solucoes/plataformas/puma-trading-system/para-participantes-e-traders/calendario-de-feriados.htm",
+      "instrument_groups": {
+        "mini_index": {
+          "symbols": ["WIN", "IND", "MBR"],
+          "session_id": "b3_mini_index",
+          "lot_calculator": "b3_mini_contracts"
+        },
+        "mini_usd": {
+          "symbols": ["WDO", "DOL"],
+          "session_id": "b3_mini_usd",
+          "lot_calculator": "b3_mini_contracts"
+        },
+        "rates": {
+          "symbols": ["DI1", "TIE", "SFR"],
+          "session_id": "b3_rates",
+          "lot_calculator": "b3_mini_contracts"
+        }
+      }
+    },
+    "B3_TESOURO": {
+      "display_name": "B3 Tesouro Direto",
+      "timezone": "America/Sao_Paulo",
+      "utc_offset_standard": "-03:00",
+      "has_dst": false,
+      "trading_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+      "instrument_groups": {
+        "direct_treasury": {
+          "symbols": ["NTN-F", "LTN", "LFT", "IPCA+"],
+          "session_id": "b3_tesouro",
+          "lot_calculator": "b3_bonds"
+        }
+      }
+    },
+    "B3_FIXED_INCOME_FUTURES": {
+      "display_name": "B3 Futuros de Renda Fixa",
+      "timezone": "America/Sao_Paulo",
+      "utc_offset_standard": "-03:00",
+      "has_dst": false,
+      "trading_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+      "instrument_groups": {
+        "ntn_f_futures": {
+          "symbols": ["NTN-F_FUT"],
+          "session_id": "b3_fixed_income",
+          "lot_calculator": "b3_bonds"
+        }
+      }
+    },
+    "FOREX_SPOT": {
+      "display_name": "Forex Spot",
+      "timezone": "UTC",
+      "utc_offset_standard": "+00:00",
+      "has_dst": false,
+      "trading_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+      "weekend_reopen": {
+        "utc": "sunday 21:00",
+        "note": "Apertura del fin de semana en la mayoría de brokers/feeds. Horario variable por proveedor; validar contra el adaptador."
+      },
+      "weekend_close": {
+        "utc": "friday 21:00",
+        "note": "Cierre de fin de semana. Horario variable por proveedor; validar contra el adaptador."
+      },
+      "instrument_groups": {
+        "majors": {
+          "symbols": ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD"],
+          "session_id": "forex_spot"
+        },
+        "crosses": {
+          "symbols": ["EURJPY", "GBPJPY", "EURGBP", "AUDJPY"],
+          "session_id": "forex_spot"
+        }
+      }
+    },
+    "CRYPTO_PERPETUAL": {
+      "display_name": "Cripto Perpetual",
+      "timezone": "UTC",
+      "utc_offset_standard": "+00:00",
+      "has_dst": false,
+      "trading_days": [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday"
+      ],
+      "weekend": {
+        "note": "Mercado 24/7. Sin cierre de fin de semana, pero con liquidez muy baja entre 22:00 y 02:00 UTC (sábado/domingo).",
+        "reduced_liquidity_windows": [
+          { "start_utc": "22:00", "end_utc": "02:00", "liquidity": "thin" }
+        ]
+      },
+      "funding_events": {
+        "note": "Funding rate de contratos perpétuos (Binance/Bybit): 00:00, 08:00 e 16:00 UTC (verificar por exchange).",
+        "times_utc": ["00:00", "08:00", "16:00"],
+        "block_new_entries_minutes": 5
+      },
+      "daily_reset": {
+        "utc": "00:00",
+        "note": "Manutenção diária nas exchanges centralizadas. Comissão baixa: evitar novas entradas."
+      },
+      "instrument_groups": {
+        "majors": {
+          "symbols": ["BTCUSDT", "ETHUSDT"],
+          "session_id": "crypto_24x7",
+          "lot_calculator": "crypto_notional_usdt"
+        }
+      }
+    }
+  },
+  "sessions": {
+    "b3_mini_index": {
+      "timezone": "America/Sao_Paulo",
+      "confidence": "high",
+      "source": "B3 - Ofício Circular 043/2025-VNC / 005/2026-PRE (FUT WIN/IND/MBR)",
+      "windows": [
+        {
+          "id": "regular",
+          "start_local": "09:00",
+          "end_local": "18:25",
+          "liquidity": "deep",
+          "allow_trading": true,
+          "note": "Pregão regular. Das 09:00 às 10:00 opera com o mercado à vista ainda fechado (livro raso)."
+        }
+      ],
+      "liquidity_windows": [
+        { "start_local": "09:00", "end_local": "10:00", "liquidity": "thin", "note": "Sem mercado à vista aberto." },
+        { "start_local": "10:00", "end_local": "16:00", "liquidity": "deep" },
+        { "start_local": "16:00", "end_local": "18:25", "liquidity": "normal", "note": "Fechamento e call eletrônico de ajuste." }
+      ],
+      "settlement": {
+        "price_fix_local": "16:50-17:00",
+        "confidence": "medium",
+        "note": "Janela de apuração do preço de ajuste. Verificar o Ofício Circular vigente antes de produção."
+      }
+    },
+    "b3_mini_usd": {
+      "timezone": "America/Sao_Paulo",
+      "confidence": "high",
+      "source": "B3 - Ofício Circular 043/2025-VNC (FUT WDO/DOL)",
+      "windows": [
+        { "id": "regular", "start_local": "09:00", "end_local": "18:05", "liquidity": "deep", "allow_trading": true },
+        {
+          "id": "after_market",
+          "start_local": "18:05",
+          "end_local": "18:30",
+          "liquidity": "thin",
+          "allow_trading": true,
+          "note": "After market. Liquidez baixa; é a janela típica de reação a NFP/FOMC."
+        },
+        {
+          "id": "overnight",
+          "start_local": "18:30",
+          "end_local": "06:00",
+          "liquidity": "thin",
+          "allow_trading": false,
+          "note": "Pregão noturno. Desabilitado por padrão (risco de gap na abertura). Habilitar apenas com override explícito na config."
+        }
+      ],
+      "liquidity_windows": [
+        { "start_local": "12:30", "end_local": "15:30", "liquidity": "deep", "note": "Sobreposição com a abertura e o fechamento de Nova York (verificar a sazonalidade do DST dos EUA)." },
+        { "start_local": "09:00", "end_local": "10:00", "liquidity": "thin", "note": "Abertura da B3 com Londres ainda em andamento." }
+      ],
+      "settlement": {
+        "price_fix_local": "16:50-17:00",
+        "confidence": "medium",
+        "note": "Verificar grade vigente."
+      }
+    },
+    "b3_rates": {
+      "timezone": "America/Sao_Paulo",
+      "confidence": "high",
+      "source": "B3 - Horário de negociação | Taxas de juros (FUT DI1 09:00-18:00)",
+      "windows": [
+        { "id": "regular", "start_local": "09:00", "end_local": "18:00", "liquidity": "normal", "allow_trading": true }
+      ],
+      "liquidity_windows": [
+        { "start_local": "17:30", "end_local": "18:00", "liquidity": "thin", "note": "Fechamento com pouca liquidez em DI." }
+      ],
+      "settlement": {
+        "price_fix_local": "17:00-17:05",
+        "confidence": "medium",
+        "note": "Verificar grade vigente."
+      }
+    },
+    "b3_tesouro": {
+      "timezone": "America/Sao_Paulo",
+      "confidence": "high",
+      "source": "B3 - Tesouro Direto, Informações técnicas (09:30-18:00)",
+      "windows": [
+        { "id": "regular", "start_local": "09:30", "end_local": "18:00", "liquidity": "thin", "allow_trading": true, "note": "Mercado de tesouro é de REFERÊNCIA, não de execução. Sem order flow real." }
+      ],
+      "liquidity_windows": [
+        { "start_local": "10:00", "end_local": "16:00", "liquidity": "normal" },
+        { "start_local": "17:30", "end_local": "18:00", "liquidity": "dead" }
+      ]
+    },
+    "b3_fixed_income": {
+      "timezone": "America/Sao_Paulo",
+      "confidence": "unverified",
+      "source": "B3 - Ofício Circular 043/2025-VNC: contratos de renda fixa 'permanecerão inalterados'",
+      "windows": [
+        {
+          "id": "regular",
+          "start_local": "10:00",
+          "end_local": "17:00",
+          "liquidity": "thin",
+          "allow_trading": true,
+          "note": "VERIFICAR contra a grade oficial de renda fixa da B3 antes de usar em produção."
+        }
+      ],
+      "liquidity_windows": [
+        { "start_local": "17:00", "end_local": "18:00", "liquidity": "dead" }
+      ],
+      "requires_verification": true
+    },
+    "forex_spot": {
+      "timezone": "UTC",
+      "confidence": "high",
+      "source": "Babypips / Dukascopy / DailyForex (tabelas de sessões FX em UTC)",
+      "sessions_utc": [
+        { "id": "sydney", "start_utc": "22:00", "end_utc": "06:00", "liquidity": "thin" },
+        { "id": "tokyo", "start_utc": "00:00", "end_utc": "09:00", "liquidity": "normal" },
+        { "id": "london", "start_utc": "07:00", "end_utc": "16:00", "liquidity": "deep" },
+        { "id": "new_york", "start_utc": "12:00", "end_utc": "21:00", "liquidity": "deep" }
+      ],
+      "overlaps_utc": [
+        {
+          "id": "london_new_york",
+          "start_utc": "12:00",
+          "end_utc": "16:00",
+          "liquidity": "deep",
+          "note": "Maior liquidez do dia. Spreads mínimos. Janela preferida para execução."
+        },
+        {
+          "id": "tokyo_london",
+          "start_utc": "07:00",
+          "end_utc": "09:00",
+          "liquidity": "normal",
+          "note": "Faixa de 1h de baixa liquidez entre Tóquio e Londres."
+        },
+        {
+          "id": "sydney_tokyo",
+          "start_utc": "00:00",
+          "end_utc": "06:00",
+          "liquidity": "normal",
+          "note": "Sessão asiática. AUD/NZD."
+        }
+      ],
+      "dead_zones_utc": [
+        {
+          "start_utc": "21:00",
+          "end_utc": "22:00",
+          "liquidity": "dead",
+          "note": "Fechamento de NY / pré-abertura de Sydney. Baixa liquidez."
+        }
+      ],
+      "dst_note": "Londres e Nova York mudam de horário em datas praticamente coincidentes. No horário de verão (inverno boreal), a janela Londres-NY se desloca 1h em relação ao horário padrão UTC."
+    },
+    "crypto_24x7": {
+      "timezone": "UTC",
+      "confidence": "high",
+      "source": "Prática de mercado (Binance/Bybit). Verificar por corretora.",
+      "windows": [
+        { "id": "asia", "start_utc": "00:00", "end_utc": "08:00", "liquidity": "normal", "allow_trading": true },
+        { "id": "europe", "start_utc": "08:00", "end_utc": "13:00", "liquidity": "deep", "allow_trading": true },
+        { "id": "us", "start_utc": "13:00", "end_utc": "20:00", "liquidity": "deep", "allow_trading": true },
+        {
+          "id": "late_us",
+          "start_utc": "20:00",
+          "end_utc": "00:00",
+          "crosses_midnight": true,
+          "liquidity": "thin",
+          "allow_trading": true,
+          "note": "Sessão US tardia. Volatilidade em queda. Evitar novas entradas, salvo swing."
+        }
+      ],
+      "liquidity_windows": [
+        { "start_utc": "04:00", "end_utc": "06:00", "liquidity": "thin", "note": "Dead zone do mercado asiático." }
+      ]
+    }
+  }
+}
