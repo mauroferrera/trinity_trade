@@ -98,13 +98,45 @@ Decisión registrada en `DECISIONS.md` (D-005).
 - Suite completa: `347 passed, 2 xfailed` (los xfail siguen siendo los de calibración heredada de la Fase 1).
 - `database/trading.db` creada y vacía (14 tablas, 1 rol, 0 trades). `.gitignore:16` la excluye, confirmado con `git check-ignore`.
 
-## Fase 3 – Adaptadores (`adapters/`)
-- [ ] Crear `adapters/base_adapter.py` (interfaz abstracta OHLC/Ticks/Depth + datos normalizados)
-- [ ] Crear `adapters/forex/mt5_forex.py` (extraer MT5: patterns_service, cvd_service, mt5_export, lock único)
-- [ ] Crear esqueletos `adapters/b3/mt5_b3.py`, `nelogica_profit.py`, `cedro_technologies.py`
-- [ ] Crear esqueletos `adapters/crypto/binance_ws.py`, `bybit_ccxt.py`
-- [ ] Crear `adapters/forex/databento_cme.py` (opcional)
-- [ ] Tests adaptadores (mocks) → VERDES
+## Fase 3 – Adaptadores (`adapters/`) - COMPLETA
+- [x] Crear `adapters/base_adapter.py` (interfaz abstracta OHLC/Ticks/Depth + datos normalizados)
+- [x] Crear `adapters/forex/mt5_forex.py` (extraer MT5: patterns_service, cvd_service, mt5_export, lock único)
+- [x] Crear esqueletos `adapters/b3/mt5_b3.py`, `nelogica_profit.py`, `cedro_technologies.py`
+- [x] Crear esqueletos `adapters/crypto/binance_ws.py`, `bybit_ccxt.py`
+- [x] Crear `adapters/forex/databento_cme.py` (opcional)
+- [x] Tests adaptadores (mocks) → VERDES
+
+**La forma normalizada ya no se inventa: se hereda de lo que `core/` consume**
+
+- Vela: `{"time", "open", "high", "low", "close", "volume"}` con `time` en SEGUNDOS epoch. Es lo que ya esperan `core.market_view` y `core.orderflow_engine`, no un formato nuevo.
+- Trade: `{"ts", "price", "size", "side"}` con `side` en `"A"`/`"B"` = lado AGRESOR. `A`/`B` y no `buy`/`sell` porque el agresor no es el lado que cierra: en una compra agresiva el agresor está en el Ask.
+- `SymbolSpec` con la regla del pip (`point * 10 si digits >= 3`), que ya distingue pips de puntos en oro e índices.
+- El CVD **no** se recalcula aquí: `core.orderflow_engine.build_cvd_series()` ya es puro y es el dueño de ese cálculo. El adaptador solo entrega velas.
+
+**El bug que motivó la fase: REF tenía TRES puertas a MT5**
+
+- `patterns_service.py` con executor `mt5p`, lock y `initialize()`/`shutdown()` propios.
+- `cvd_service.py` con executor `mt5c`, lock y ciclo propios.
+- `research/data.py` con un `RLock` y ciclo propios. `app.run_mt5` es alias de `patterns_service._mt5_run`.
+
+Tres ciclos de vida para un terminal que es un recurso de proceso es la forma de que dos hilos lleguen a la vez. Ahora hay una `Session` por proceso con un `ThreadPoolExecutor(max_workers=1)`: una sola puerta, y `close()` drena lo que está en vuelo antes de cerrar. Tres tests lo fijan, y uno de ellos corre la prueba 20 veces seguidas porque este tipo de bug es intermitente por naturaleza.
+
+**Dos decisiones que los tests obligaron a cambiar**
+
+- El doble de MT5 (`tests/unit/mt5_fake.py`) NO lleva cuenta de concurrencia: contar ahí metería una lock en el sitio donde se quiere demostrar que no la hay. La serialización se demuestra con `threading.Event` (el segundo trabajo no puede entrar mientras el primero está dentro), no con un contador que el doble ajustaría por su cuenta.
+- `runtime_checkable` de Python 3.12 mira NOMBRES, no significados: `isinstance(DatabentoCME(), MarketDataAdapter)` es `True` aunque su `symbols()` no tenga respuesta honesta. Se documenta como límite conocido en vez de fingir que el Protocol protege. La barrera real tiene que ser la lista explícita de adaptadores de la API.
+
+**Esqueletos: construir NO falla, usar sí**
+
+- Un registro hace `{a.name: a() for a in ADAPTADORES}`; si el `__init__` lanzara, importar la API tiraría abajo el arranque por un mercado que nadie pidió. El fallo llega al usar el adaptador, que es donde el mensaje puede ser accionable.
+- B3 y cripto lanzan `AdapterError` (mercado no disponible). Databento **no**: es un proveedor de datos, no un mercado, y su fallo es de configuración. Mezclarlos haría que un `except AdapterError` que significa "el bróker no responde" se tragara un error de clave de API.
+- `WINFUT26` **no** se normaliza a `WIN`. `normalize_symbol()` corta en `.`, `_`, `-`, `#` y un futuro sin separador no tiene dónde cortar; adivinar dónde acaba el subyacente (`WIN` vs `WING`) es un parser de exchange. Queda documentado como límite en vez de escrito como heurística.
+
+**Verificación**
+
+- Suite completa: `467 passed, 2 xfailed` (los xfail siguen siendo los de calibración heredados de la Fase 1).
+- `test_adapter_skeletons.py` fija el contrato de los cinco: 35 tests.
+- Import de los seis módulos de adaptadores sin abrir terminal, y sin que ninguno tire al importarse.
 
 ## Fase 4 – Macro/Ingestores (`macro_ingestor/`)
 - [ ] `macro_ingestor/forex/cot_service.py` (desde Trading)

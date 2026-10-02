@@ -1,9 +1,9 @@
 {
   "project_name": "MultiMarket Quant Engine",
   "version": "0.1.0",
-  "active_phase": "Phase 2 - Persistencia (database/)",
-  "status": "phase_2_database_complete_ready_for_phase_3",
-  "last_updated": "2026-10-01T00:00:00Z",
+  "active_phase": "Phase 3 - Adaptadores (adapters/)",
+  "status": "phase_3_adapters_complete_ready_for_phase_4",
+  "last_updated": "2026-10-02T00:00:00Z",
   "blockers": [],
   "repo": {
     "versioned": true,
@@ -51,18 +51,22 @@
     "tests/fixtures/schema_snapshot.json",
     "tests/unit/test_schema.py",
     "tests/unit/test_store.py",
-    "tests/unit/test_store_crud.py"
+    "tests/unit/test_store_crud.py",
+    "adapters/base_adapter.py",
+    "adapters/forex/mt5_forex.py",
+    "adapters/forex/databento_cme.py (esqueleto)",
+    "adapters/b3/mt5_b3.py (esqueleto)",
+    "adapters/b3/nelogica_profit.py (esqueleto)",
+    "adapters/b3/cedro_technologies.py (esqueleto)",
+    "adapters/crypto/binance_ws.py (esqueleto)",
+    "adapters/crypto/bybit_ccxt.py (esqueleto)",
+    "tests/unit/mt5_fake.py",
+    "tests/unit/test_base_adapter.py",
+    "tests/unit/test_mt5_forex.py",
+    "tests/unit/test_adapter_skeletons.py"
   ],
   "in_progress": [],
   "pending_modules": [
-    "adapters/base_adapter.py",
-    "adapters/forex/mt5_forex.py",
-    "adapters/forex/databento_cme.py",
-    "adapters/b3/mt5_b3.py",
-    "adapters/b3/nelogica_profit.py",
-    "adapters/b3/cedro_technologies.py",
-    "adapters/crypto/binance_ws.py",
-    "adapters/crypto/bybit_ccxt.py",
     "macro_ingestor/forex/cot_service.py",
     "macro_ingestor/forex/dxy_service.py",
     "macro_ingestor/forex/calendar_news.py",
@@ -96,7 +100,7 @@
     "phase_0_scaffolding": "completed",
     "phase_1_core": "completed",
     "phase_2_database": "completed",
-    "phase_3_adapters": "pending",
+    "phase_3_adapters": "completed",
     "phase_4_macro_ingestor": "pending",
     "phase_5_agent": "pending",
     "phase_6_api_frontend": "pending",
@@ -120,6 +124,7 @@
     "supporting_services_placement"
   ],
   "decisions_phase_2": ["D-014", "D-015", "D-016"],
+  "decisions_phase_3": ["D-017", "D-018", "D-019", "D-020", "D-021"],
   "phase_1_results": {
     "tests": "258 passed, 2 xfailed (python -m pytest tests -q)",
     "baseline_before_phase_1": "875 passed, 2 xfailed (suite de REF, no de este repo)",
@@ -176,6 +181,44 @@
       "tests de app.py (pertenecen a la Fase 6)",
       "el reloj de broker de REF/tclock.py (se queda con MT5 en la Fase 3)"
     ]
+  },
+  "phase_3_results": {
+    "tests": "467 passed, 2 xfailed (python -m pytest tests -q)",
+    "mt5_session": "Una Session por proceso con ThreadPoolExecutor(max_workers=1). Cierra drenando lo que esta en vuelo. Sustituye las TRES puertas independientes de REF.",
+    "normalized_shapes": {
+      "candle": "{time, open, high, low, close, volume} con time en SEGUNDOS epoch (lo que core/ ya consume, no un formato nuevo)",
+      "trade": "{ts, price, size, side} con side en A/B = lado agresor (A = Ask). A/B y no buy/sell porque el agresor no es el lado que cierra",
+      "spec": "SymbolSpec con la regla del pip (point*10 si digits>=3), que ya distingue pips de puntos"
+    },
+    "modules": [
+      "adapters/base_adapter.py (excepciones, SymbolSpec, Candle, normalizadores, MarketDataAdapter Protocol)",
+      "adapters/forex/mt5_forex.py (Session + MT5ForexAdapter; import perezoso, conexion cacheada)",
+      "adapters/b3/mt5_b3.py, nelogica_profit.py, cedro_technologies.py (esqueletos)",
+      "adapters/crypto/binance_ws.py, bybit_ccxt.py (esqueletos)",
+      "adapters/forex/databento_cme.py (esqueleto; historico MBO, no es un mercado)"
+    ],
+    "decisions": {
+      "D-017": "Una sola sesion de MT5 por proceso, con un unico hilo (no un lock)",
+      "D-018": "La forma normalizada se hereda de lo que core/ ya consume; el CVD no se recalcula en el adaptador",
+      "D-019": "WINFUT26 no se normaliza a WIN: sin separador no hay donde cortar",
+      "D-020": "Los esqueletos fallan al USAR, no al construir; Databento no hereda de AdapterError",
+      "D-021": "El doble de MT5 no lleva contadores de concurrencia (serian auto-adjustados y la asercion no probaria nada)"
+    },
+    "bugs_found_in_ref": [
+      "REF tenia TRES puertas a MT5 con ciclo de vida propio: patterns_service.py (executor mt5p), cvd_service.py (executor mt5c) y research/data.py (RLock). El terminal es un recurso de proceso: uno puede cerrarlo mientras otro lo usa.",
+      "app.run_mt5 es alias de patterns_service._mt5_run, asi que el nombre sugeria una puerta unica que no existia",
+      "mt5_export.py y symbol_specs.py usan un cuarto patron: leen MT5 sin pasar por ninguna sesion compartida"
+    ],
+    "known_limits": [
+      "runtime_checkable (Python 3.12) solo mira nombres: isinstance(DatabentoCME(), MarketDataAdapter) es True aunque symbols() no tenga respuesta honesta. La barrera real debe ser la lista explicita de adaptadores de la API, no el tipo.",
+      "normalize_symbol() solo corta en . _ - #: los futuros de B3 sin separador (WINFUT26) no se normalizan, a proposito"
+    ],
+    "not_implemented_deliberately": [
+      "Los cinco esqueletos de B3/cripto: falta elegir proveedor, que es decision de negocio (b3_provider_initial sigue pendiente)",
+      "El reloj de broker de REF/tclock.py: se queda con MT5; core/clock.py ya cubre UTC"
+    ],
+    "tests_added": "test_base_adapter.py (45), test_mt5_forex.py (40), test_adapter_skeletons.py (35)",
+    "concurrency_test": "El test de serializacion se ejecuto 20 veces seguidas sin intermitencia (python -m pytest tests/unit/test_mt5_forex.py::TestLaSesionEsLaUnicaPuerta en bucle)"
   },
   "reference_code": {
     "path": "C:/Users/fmaur/Desktop/Trading",

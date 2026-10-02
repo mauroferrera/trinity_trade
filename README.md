@@ -86,7 +86,7 @@ unidireccional y `core/` **jamás** importa `adapters/`, `api/` ni `agent/`.
 |---|---|
 | 1 | `core/` es **100% agnóstico** al activo/mercado: sin MT5, Databento, Binance ni feeds. |
 | 2 | Núcleo = **lógica pura**. I/O, websockets, requests y APIs viven en `adapters/`, `macro_ingestor/`, `api/`. |
-| 3 | **Inversión de dependencias**: los adaptadores implementan `base_adapter.BaseAdapter` y entregan datos **normalizados**. |
+| 3 | **Inversión de dependencias**: los adaptadores implementan el Protocol `base_adapter.MarketDataAdapter` y entregan datos **normalizados** (`{"time","open","high","low","close","volume"}` y `{"ts","price","size","side"}`, con `side` en `A`/`B` = lado agresor). |
 | 4 | **Lógica de negocio fuera de la API**: endpoints delgados; `api/app.py` solo hace bootstrap. |
 | 5 | **Monorepo modular**: un repo para B3 + Forex/CME + Cripto. |
 | 6 | **Tests verdes antes de marcar completado** — ningún módulo pasa a `completed` sin `pytest` en verde. |
@@ -164,12 +164,25 @@ Ninguna suite unitaria debe depender de MT5: los adaptadores se prueban con mock
 - `.env.example` y `requirements.txt` (FastAPI, MT5, Databento, CCXT, LiteLLM, pytest…).
 - `config/asset_sources_map.yaml` — esqueleto B3 / Forex / Cripto.
 - `config/trading_hours.json` — sesiones, solapamientos y liquidez con control de confianza.
+- **Fase 1 · `core/`** — `risk_engine`, `smc_engine`, `orderflow_engine` (CVD puro),
+  `market_view`, `simulator`, `lot_calculator`, `clock`, `paths`, `trade_history`.
+  Agnóstico al mercado, verificado por un guardián AST (`tests/unit/test_core_purity.py`).
+- **Fase 2 · `database/`** — `models.py` (fuente de verdad del esquema), `schema.sql`
+  generado, `store.py` portada de REF con seam de config inyectable. 14 tablas
+  idénticas a las de producción, comparadas contra un snapshot congelado.
+- **Fase 3 · `adapters/`** — `base_adapter.py` (contrato y forma normalizada),
+  `forex/mt5_forex.py` (**una sola sesión MT5 por proceso**, con un único hilo y
+  cierre que drena lo que está en vuelo) y esqueletos para B3 (3), cripto (2) y
+  Databento. La suite no necesita terminal: todo se prueba con un doble.
+
+Suite completa: **467 passed, 2 xfailed** (`pytest tests -q`). Los dos `xfail` son
+decisiones de calibración heredadas de la Fase 1, no código roto.
 
 ### Pendiente
 
-`core/`, `adapters/`, `macro_ingestor/`, `agent/`, `api/`, `database/` y `static/`
-contienen la estructura pero **ningún módulo implementado todavía**. Todo el código
-del motor sigue pendiente de portar desde el proyecto de referencia.
+`macro_ingestor/`, `agent/`, `api/` y `static/` están aún sin implementar. Los cinco
+adaptadores de B3 y cripto están en **esqueleto**: faltan elegir proveedor (decisión de
+negocio), no código.
 
 ### Código de referencia (restaurado)
 

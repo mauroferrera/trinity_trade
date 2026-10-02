@@ -300,3 +300,121 @@ siembra el rol `general` con prompt vacio y avisa con `RuntimeWarning`. El esque
 existir ANTES de que haya estrategia. Solo se traga `ConfigUnavailable`; un YAML corrupto
 sigue exploando, y hay test que lo fija, porque tragarse ese error convertiria un bug
 visible en un prompt de rol vacio silencioso.
+### D-017 - Una sola sesion de MT5 por proceso, con un unico hilo
+
+**Contexto:** REF tenia TRES puertas independientes al terminal MT5, cada una con su
+propio ciclo de vida: `patterns_service.py` (executor `mt5p`, lock, `initialize()` y
+`shutdown()`), `cvd_service.py` (executor `mt5c`, lock y ciclo propios) y
+`research/data.py` (un `RLock` y ciclo propios). `app.run_mt5` es alias de
+`patterns_service._mt5_run`, asi que ademas el nombre sugeria una puerta unica que no
+existia.
+
+El terminal MT5 es un recurso de PROCESO, no de hilo. Con tres ciclos de vida
+independientes, uno puede cerrar el terminal mientras otro lo esta usando, y el
+sintoma (None en todas las velas, o un None en medio de una serie) aparece lejos de la
+causa.
+
+**Decision:** `adapters/forex/mt5_forex.py` expone una `Session` por proceso con un
+`ThreadPoolExecutor(max_workers=1, thread_name_prefix="mt5")`. `get_session()` /
+`set_session()` permiten sustituirla en tests. La conexion se cachea y se reutiliza (no
+se llama `initialize()` en cada lectura), y `close()` drena lo que esta en vuelo antes de
+cerrar: si no, un cierre concurrente dejaria un `Future` corriendo contra un terminal
+apagado.
+
+**Por que un hilo y no un lock:** el lock resuelve el acceso concurrente pero no el
+`initialize()`/`shutdown()` en la 때문이다. Un executor de un solo hilo da las dos cosas
+con un mecanismo, y hace que el orden de las llamadas sea FIFO y visible.
+
+**Consecuencia asumida:** las llamadas se serializan, asi que un stream lento bloquea a
+los demas. Es aceptable: MT5 no gana nada de ser llamado en paralelo, y el
+diagnosticar de "va lento pero va" es mejor que el de "a veces None sin explicación".
+
+### D-018 - La forma normalizada se hereda de lo que `core/` ya consume
+
+**Contexto:** el plan de la Fase 3 pedia "interfaz abstracta OHLC/Ticks/Depth + datos
+normalizados". Definir un formato nuevo habria obligado a tocar `core/`, que esta
+terminado y verificado, para adaptinglo a una forma arbitraria.
+
+**Decision:** la forma normalizada es exactamente la que `core/` ya consume. Vela
+`{"time", "open", "high", "low", "close", "volume"}` con `time` en SEGUNDOS epoch; trade
+`{"ts", "price", "size", "side"}` con `side` en `"A"`/`"B"`.
+
+`A`/`B` y no `buy`/`sell` porque el campo es el lado AGRESOR, no el lado que cierra la
+posicion: en una orden de compra agresiva el agresor esta en el Ask. Llamarlo "buy"
+confunde el delta con la posicion.
+
+**Reglas que el modulo hace cumplir por construccion:**
+
+- `time` en segundos, siempre. MT5 mezcla segundos y microsegundos; ccxt devuelve
+  MILISEGUNDOS. Es la razon mas clara de por que la conversion vive en el adaptador y
+  no en cada uno por su cuenta.
+- Fallo explicito en vez de numero inventado: `tick_value=0` significa "el broker no lo
+  publica", y las funciones de dinero devuelven `None` en vez de `0.0`. Un `0.0` se lee
+  como "no hay riesgo" cuando significa "no lo se".
+- `normalize_symbol()` quita sufijos para COMPARAR y NUNCA para ENVIAR: mandar `EURUSD`
+  cuando el broker publica `EURUSD.a` da `SymbolNotFound`.
+
+**Consecuencia asumida:** el CVD no se calcula en el adaptador.
+`core/orderflow_engine.build_cvd_series()` ya es puro y es el dueno de ese calculo;
+duplicarlo en el adaptador es la forma de que los dos divergan.
+
+### D-019 - `WINFUT26` no se normaliza a `WIN`, y por eso no se normaliza
+
+**Contexto:** los futuros de B3 se escriben sin separador (`WINFUT26`, `WINQ26`,
+`INDZ26`). Una normalizacion que quitasse los ultimos caracteres daria `WIN`, que es lo
+que un usuario esperaria, pero no se puede distinguir de un subyacente que se llamase
+literalmente `WINFUT`.
+
+**Decision:** `normalize_symbol()` corta SOLO en `.`, `_`, `-` y `#`. Un simbolo sin
+separador se devuelve tal cual. `contrato_base()` en `adapters/b3/mt5_b3.py` lo delega y
+documenta el limite, en vez de anadir una heuristica que "casi siempre" acierta.
+
+**Por que no la heuristica:** una heuristica con falsos positivos envia a la B3 un simbolo
+equivocado, y el error aparece en la orden, no en la normalizacion. Un fallo local es
+mucho mas barato que uno que llega al mercado. Si de verdad hace falta, la respuesta
+correcta es un mapa declarado por simbolo en `config/asset_sources_map.yaml`, no adivinar.
+
+**Consecuencia asumida:** `WINFUT26` y `WIN` NO coinciden como claves de cache ni al
+comparar con la config. Es lo correcto: son el mismo subyacente pero contratos
+distintos, con expiraciones distintas, y mezclarlos produce una serie continua que en la
+realidad tiene un salto de meses.
+
+### D-020 - Los esqueletos fallan al USAR, no al construir, y cada familia lanza su tipo
+
+**Contexto:** los cinco esqueletos de B3, cripto y Databento no pueden implementarse sin
+elegir proveedor, y esa es una decision de negocio. Un `__init__` que lanzara haria que
+un registro de adaptadores (`{a.name: a() for a in TODOS}`) reventara al importarse, por
+un mercado que nadie pidio.
+
+**Decision:**
+
+- Construir no falla; el error llega al invocar `symbols()`/`ohlc()`, que es donde el
+  mensaje puede decir que hacer.
+- B3 y cripto lanzan `AdapterError` (vía `TerminalUnavailable`): "este mercado no esta
+  disponible" es exactamente lo que son.
+- Databento lanza `DatabentoNoConfigurado`, que NO hereda de `AdapterError`. Es un
+  proveedor de datos historicos, no un mercado: no hay terminal que abrir. Si
+  compartiera la jerarquia, un `except AdapterError` que hoy significa "el broker no
+  responde" se tragaría también un error de clave de API, y quien lo manejara le diria al
+  usuario que abra la terminal que no existe.
+
+**Limite conocido de `runtime_checkable`:** en Python 3.12 solo comprueba que existan
+los atributos, asi que `isinstance(DatabentoCME(), MarketDataAdapter)` es `True` aunque su
+`symbols()` no tenga respuesta honesta. No se puede arreglar desde la libreria. Se
+documenta en `tests/unit/test_adapter_skeletons.py` y la barrera real tiene que ser la
+lista explicita de adaptadores de la API, no el tipo.
+
+### D-021 - El doble de MT5 no lleva cuenta de concurrencia
+
+**Contexto:** al probar que la `Session` serializa el acceso, la forma evidentemente
+correcta era contar llamadas concurrentes en `FakeMT5` y afirmar `max <= 1`.
+
+**Decision:** el doble NO lleva contadores. El contador se ajustaria en el propio punto
+que hay que demostrar que no se solapa, asi que la asercion pasaria siempre, incluso con
+un executor de ocho hilos. La serializacion se demuestra con `threading.Event`: el
+primer trabajo marca `entra` y se bloquea, y el test afirma que un segundo trabajo NO
+puede entrar antes de que se le abra la puerta.
+
+**Refuerzo extra:** el test de concurrencia se ejecuta 20 veces seguidas. Un fallo de
+serializacion es intermitente por naturaleza y una sola pasada en verde no dice nada; el
+resultado de la repeticion se puede comprobar sin pytest-repeat.
