@@ -1,0 +1,99 @@
+risk:
+  risk_pct: 0.5
+  reduced_risk_pct: 0.25
+  loss_limit_fixed: 400.0
+  loss_limit_pct: 1.6
+  max_trades_day: 3
+execution:
+  magic: 8882026
+  comment: "ILOF Exec"
+  # Distancia del SL en UNIDADES DE PRECIO (no pips: 12 pips son 0.0012 en EURUSD
+  # y 12 PUNTOS en oro = 0.12). sl_distance_by_symbol manda sobre este valor.
+  #
+  # El global de abajo vale para el forex de 5 decimales. CUALQUIER otro mercado
+  # necesita entrada propia: aplicarle 0.0012 al oro es un stop de risa, y la UI no
+  # lo va a avisar por sí sola (el campo sl_distance_source solo lo marca). Estos
+  # valores son un punto de partida TÍPICO por volatilidad, no un cálculo: revísalos
+  # contra tu gestión antes de operar en un símbolo que no sea EURUSD.
+  sl_distance: 0.0012
+  sl_distance_by_symbol:
+    XAUUSD: 3.0
+    XAGUSD: 0.30
+    NAS100: 15.0
+    USTEC: 15.0
+    US500: 6.0
+    US30: 30.0
+    GER30: 15.0
+    DAX: 15.0
+    USDJPY: 0.30
+    EURJPY: 0.30
+    GBPJPY: 0.40
+  tp_ratio_r: 2.0
+  deviation_points: 15
+  news_buffer_min: 15
+  # Solo EURUSD ejecuta. DAX sigue en watcher.symbols: se escanea, se loguean sus
+  # setups (incluidas las intenciones dry-run en auto_execute=false) y se auditan,
+  # pero execute_market_trade rechaza cualquier orden que no sea EURUSD. La
+  # restriction no toca el escaneo (watcher.itera watcher.symbols), solo la orden.
+  symbols_allow: ["EURUSD"]
+score:
+  min_score: 59.5
+  min_rr: 2.0
+  setup_ttl_minutes: 40.0
+  weights:
+    cot: 0.0
+    cvd_of: 20.0
+    smc: 50.0
+    killzone: 0.0
+    smr_dxy: 15.0
+killzones:
+# Ventanas en UTC (las killzones NO se mueven al horario del broker: el score
+# razona en UTC, que es lo que ve el gráfico y lo que lee el agente).
+- name: Londres
+  start: 07:00
+  end: '10:00'
+- name: Nueva York
+  start: '12:30'
+  end: '15:30'
+clock:
+  # Zona horaria del SERVIDOR DEL BROKER (no la del SO, no la del mercado).
+  # Define el "día de trading": la medianoche de aquí es la misma frontera que
+  # usa el EA (TimeTradeServer()) para resetear el contador de operaciones y el
+  # balance inicial del día. Si esto no coincide con el broker, EA y bot cuentan
+  # ventanas distintas y max_trades_day deja de ser un tope compartido.
+  # MetaQuotes-Demo y los brokers EU usan UTC+2 invierno / UTC+3 verano.
+  broker_tz: "Europe/Helsinki"
+  # Offset fijo en minutos. 0 = derivar de broker_tz (respeta el DST).
+  # Ponlo a un valor > 0 solo si tu broker NO cambia de horario: entonces manda
+  # este número sobre broker_tz.
+  broker_utc_offset_minutes: 0
+prop:
+  # OFF hasta que las Fases 1-3 tengan datos. Con enabled: true, dos reglas
+  # configuradas competían sin orden escrito: loss_limit_pct 1.6 (tope del EA)
+  # contra prop_max_dd_daily_pct 2.0, y el que ganara dependía de cuál se
+  # evaluara antes. Además el agente anunciaba "consistencia 4d" como parte de
+  # la política de riesgo y prop_consistency_days no bloquea nada: el sistema
+  # afirmaba una garantía que no cumple, y se la afirmaba a quien decide.
+  enabled: false
+  max_dd_daily_pct: 2.0
+  max_dd_total_pct: 6.0
+  max_profit_day_pct: 1.5
+  consistency_days: 4
+data_sources:
+  cot: true
+  cvd_of: true
+  smc: true
+  killzone: true
+  news: true
+  orderflow: false
+  smr_dxy: true
+watcher:
+  enabled: true
+  scan_interval_sec: 30
+  auto_execute: false
+  dedup_ttl_sec: 900
+  symbols:
+  - symbol: EURUSD
+    timeframe: M15
+  - symbol: DAX
+    timeframe: M15
