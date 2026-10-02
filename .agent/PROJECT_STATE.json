@@ -1,8 +1,8 @@
 {
   "project_name": "MultiMarket Quant Engine",
   "version": "0.1.0",
-  "active_phase": "Phase 1 - Nucleo (core/)",
-  "status": "phase_1_core_complete_ready_for_phase_2",
+  "active_phase": "Phase 2 - Persistencia (database/)",
+  "status": "phase_2_database_complete_ready_for_phase_3",
   "last_updated": "2026-10-01T00:00:00Z",
   "blockers": [],
   "repo": {
@@ -43,12 +43,18 @@
     "tests/unit/test_simulator.py",
     "tests/unit/test_paths.py",
     "tests/unit/test_lot_calculator.py",
-    "tests/unit/test_core_purity.py"
+    "tests/unit/test_core_purity.py",
+    "core/clock.py",
+    "database/models.py",
+    "database/schema.sql",
+    "database/store.py",
+    "tests/fixtures/schema_snapshot.json",
+    "tests/unit/test_schema.py",
+    "tests/unit/test_store.py",
+    "tests/unit/test_store_crud.py"
   ],
   "in_progress": [],
   "pending_modules": [
-    "database/store.py",
-    "database/models.py",
     "adapters/base_adapter.py",
     "adapters/forex/mt5_forex.py",
     "adapters/forex/databento_cme.py",
@@ -89,7 +95,7 @@
   "phase_status": {
     "phase_0_scaffolding": "completed",
     "phase_1_core": "completed",
-    "phase_2_database": "pending",
+    "phase_2_database": "completed",
     "phase_3_adapters": "pending",
     "phase_4_macro_ingestor": "pending",
     "phase_5_agent": "pending",
@@ -110,10 +116,10 @@
     "market_priority",
     "b3_provider_initial",
     "app_py_split_strategy",
-    "database_reuse_vs_clean",
     "chartism_engine_scope",
     "supporting_services_placement"
   ],
+  "decisions_phase_2": ["D-014", "D-015", "D-016"],
   "phase_1_results": {
     "tests": "258 passed, 2 xfailed (python -m pytest tests -q)",
     "baseline_before_phase_1": "875 passed, 2 xfailed (suite de REF, no de este repo)",
@@ -140,6 +146,35 @@
     "pending_calibration": [
       "test_missing_cvd (xfail): smr_dxy pesa 15 y el fixture no tiene SMR",
       "test_sweep_and_reverse_favors_sell (xfail): el COT pesa 0 desde 64883d3"
+    ]
+  },
+  "phase_2_results": {
+    "tests": "347 passed, 2 xfailed (python -m pytest tests -q)",
+    "schema": "Identico al de REF: 14 tablas, tipos, defaults, PK e indices comparados contra tests/fixtures/schema_snapshot.json",
+    "db_created_empty": "database/trading.db (14 tablas, 1 rol, 0 trades). Excluida por .gitignore:16, confirmado con git check-ignore",
+    "modules": [
+      "core/clock.py (reloj UTC puro, extraido de REF/tclock.py)",
+      "database/models.py (SCHEMA, INDEXES, MIGRATIONS, render_sql, write_sql)",
+      "database/schema.sql (generado; un test falla si se desincroniza)",
+      "database/store.py (puerto de REF/store.py con seam de config)"
+    ],
+    "decisions": {
+      "D-014": "La DB empieza vacia; de REF se conserva el ESQUEMA, no los datos",
+      "D-015": "models.py es la fuente de verdad; schema.sql es artefacto generado",
+      "D-016": "Seam de config: default perezoso a strategy, inyectable en tests"
+    },
+    "bugs_found_and_fixed": [
+      "REF/store.py:33 recalculaba DB_PATH e ignoraba core.paths.DB_PATH. Ahora delega, con test que lo fija.",
+      "apply_migrations reventaba con 'no such table: roles' contra una base recien creada. Ahora salta tablas inexistentes.",
+      "init_db() dependia de strategy (Fase 6) via el seam y no podia crear el esquema sin el agente. Ahora siembra el rol con prompt vacio y avisa con RuntimeWarning."
+    ],
+    "contracts_documented_by_tests": [
+      "update_journal_entry es un PUT (reemplaza la fila entera), no un PATCH. Su firma no lo delata; el docstring lo dice.",
+      "get_messages filtra role='tool' a proposito (traza de debug; devolverlas sin tool_calls emparejado rompe la API del agente)"
+    ],
+    "not_ported_deliberately": [
+      "tests de app.py (pertenecen a la Fase 6)",
+      "el reloj de broker de REF/tclock.py (se queda con MT5 en la Fase 3)"
     ]
   },
   "reference_code": {

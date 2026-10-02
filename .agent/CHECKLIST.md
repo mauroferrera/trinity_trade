@@ -70,12 +70,33 @@ Decisión registrada en `DECISIONS.md` (D-005).
 - `test_missing_cvd`: `smr_dxy` pesa 15 y el fixture no trae SMR, así que el techo cae a 82.4 y 58.8 queda bajo el corte de MEDIA.
 - `test_sweep_and_reverse_favors_sell`: el COT pesa 0 desde `64883d3`, así que un COT bajista ya no empuja a ALTA.
 
-## Fase 2 – Persistencia (`database/`)
-- [ ] Mover `REF/store.py` → `database/store.py` (ajustar imports `core.paths`)
-- [ ] Crear `database/models.py` (esquema/tablas)
-- [ ] Decisión DB: reutilizar `REF/trading.db` vs limpio → registrar en `DECISIONS.md`
-- [ ] Verificar `DB_PATH` único (absoluto)
-- [ ] Tests persistencia (si existen) → VERDES
+## Fase 2 – Persistencia (`database/`) - COMPLETA
+- [x] Mover `REF/store.py` → `database/store.py` (ajustar imports `core.paths`)
+- [x] Crear `database/models.py` (esquema/tablas) + `database/schema.sql` generado
+- [x] Decisión DB: empezar de cero (D-014)
+- [x] Verificar `DB_PATH` único (absoluto)
+- [x] Tests persistencia → VERDES
+
+**Esquema idéntico al de producción, verificado**
+
+- `tests/fixtures/schema_snapshot.json` congela el esquema de `REF/trading.db` (14 tablas, tipos, defaults, PK e índices). `test_schema.py` falla si el esquema se desvía, así que la Fase 2 no puede "funcionar" contra una forma de tabla distinta a la que espera el resto del sistema.
+- `schema.sql` se genera desde `models.py` y un test compara el fichero contra el generador. Sin eso el `.sql` sería una segunda fuente de verdad que nadie actualiza.
+
+**Tres correcciones que no eran cosméticas**
+
+- `REF/store.py:33` recalculaba `DB_PATH` por su cuenta, ignorando `core.paths`. Ahora delega, y hay un test que lo fija: dos rutas a la DB es la forma más fácil de escribir en el fichero equivocado y no enterarse.
+- `apply_migrations` reventaba con `no such table: roles` al correr contra una base recién creada. Ahora salta las migraciones de tablas que aún no existen.
+- `init_db()` depended de `strategy` (Fase 6) a través del seam y no podía crear el esquema sin el agente. Al revés de lo razonable: ahora siembra el rol `general` con prompt vacío y avisa con `RuntimeWarning`. Solo se traga `ConfigUnavailable`, nunca un error de config real (hay test: un YAML roto sigue exploando).
+
+**Contrato que los tests dejaban por descubrir**
+
+- `update_journal_entry` es un PUT (reemplaza la fila entera), no un PATCH: las claves que no vienen se pierden. Lo documenta el docstring porque la firma no lo delata.
+- `get_messages` filtra las filas `role='tool'` a propósito (existen como traza de debug; devolverlas sin el `tool_calls` emparejado rompería la API del agente). El test afirma las dos mitades: persistido sí, expuesto no.
+
+**Verificación**
+
+- Suite completa: `347 passed, 2 xfailed` (los xfail siguen siendo los de calibración heredada de la Fase 1).
+- `database/trading.db` creada y vacía (14 tablas, 1 rol, 0 trades). `.gitignore:16` la excluye, confirmado con `git check-ignore`.
 
 ## Fase 3 – Adaptadores (`adapters/`)
 - [ ] Crear `adapters/base_adapter.py` (interfaz abstracta OHLC/Ticks/Depth + datos normalizados)

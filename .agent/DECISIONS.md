@@ -230,3 +230,73 @@ de las ventanas en los tests era justo lo que dejaba que los tests midieran una 
 distinta de la real. Leer el YAML directamente mantiene esa garantia sin el modulo
 intermedio. `test_risk_engine.py::test_defaults_match_strategy_yaml` sigue fijando que
 `risk_engine.DEFAULT_KILLZONES` coincide con el YAML.
+
+### D-014 - La base de datos empieza vacia, no se copia la de REF
+
+**Contexto:** `REF/trading.db` tiene 121 filas en `setup_log`, 19 en `trades` y mas en
+`cot_history` y `messages`. Es el post-mortem real de alguien, con decisiones de trading
+tomadas ahi dentro. Copiarla al repo arrastra datos personales y hace que cada test de
+persistencia dependa de datos viejos que nadie va a recordar cuando fallen.
+
+**Decision:** `database/trading.db` se crea vacia con `init_db()`. REF no se toca.
+
+**Lo que se conserva de REF es el ESQUEMA, no los datos.** `REF/store.py:33` recalculaba
+`DB_PATH` por su cuenta e ignoraba `core.paths.DB_PATH`; ahora `database/store.py` lo
+delega y `tests/unit/test_store.py` lo fija. Dos rutas a la base es la forma mas facil de
+escribir en el fichero equivocado sin enterarse.
+
+Como el esquema tiene que ser el de produccion y la base empieza vacia, la comparacion se
+hace contra el esquema congelado: `tests/fixtures/schema_snapshot.json` guarda las 14
+tablas de REF con sus tipos, defaults, PK e indices, y `tests/unit/test_schema.py` falla si
+el esquema se desvía. Es la unica forma de tener a la vez una base vacia y garantias de
+compatibilidad con el resto del sistema, que ya espera esa forma de tabla.
+
+`*.db` sigue en `.gitignore` (confirmado con `git check-ignore`), asi que aunque la base se
+regenere localmente no hay forma de que acabe en el repo por accidente.
+
+### D-015 - El esquema es codigo, y `schema.sql` es un artefacto generado
+
+**Contexto:** `.gitignore` dice que las DB "se regeneran desde schema.sql", lo cual hace de
+ese fichero una fuente de verdad que depende de que alguien se acuerde de regenerarlo cada
+vez que toca una tabla.
+
+**Decision:** `database/models.py` es la fuente de verdad (`SCHEMA`, `INDEXES`,
+`MIGRATIONS`). `database/schema.sql` se genera con `python -m database.models` y
+`tests/unit/test_schema.py::test_schema_sql_esta_sincronizado` falla si el fichero no
+coincide byte a byte con `render_sql()`. Editar el `.sql` a mano no es un cambio: rompe el
+test.
+
+**Por que separa DDL de la siembra:** REF metia en `init_db()` los `CREATE TABLE`, las
+migraciones y las filas iniciales. Las filas iniciales dependen de la config del agente
+(Fase 6), asi que mezcladas ahi el esquema no se podia aplicar en ningun entorno sin agente.
+Ahora `models.py` solo sabe de forma de tabla.
+
+**Detalle de Windows:** el `schema.sql` se escribe con `write_sql()`, que controla el
+encoding. `>` en PowerShell 5.1 produce UTF-16LE y `Out-File -Encoding utf8` mete BOM: en
+ambos casos el fichero generado no es el que espera el test, y el sintoma es un
+`UnicodeDecodeError` que apunta al fichero equivocado.
+
+### D-016 - El seam de config: default perezoso a `strategy`, inyectable en tests
+
+**Contexto:** REF hacia `import strategy` arriba del todo en `store.py`. Como `store` es
+la capa de persistencia, eso arrastraba `yaml` y `risk_engine` a cualquier test de CRUD,
+y mientras `strategy` no exista (Fase 6) `import store` falla. La Fase 2 no se puede probar
+sin la Fase 6.
+
+**Decision:** `ConfigSource` (Protocol) + `_LazyStrategyConfig` (default). El import de
+`strategy` va DENTRO del metodo, asi que solo ocurre si alguien pide la config. Un test
+mete un `FakeConfigSource` y ejercita todo el CRUD sin YAML.
+
+**El fallo es explicito:** `ConfigUnavailable` cuando no hay config. `set_config_source()`
+sustituye el seam y devuelve el anterior; `None` restaura el default.
+
+**Por que es un tipo propio y no `RuntimeError`:** hay dos reacciones distintas al mismo
+fallo. `default_trading_config()` debe estallar (quien la llama la quiere de verdad) y la
+siembra de un rol vacio debe poder seguir. Con un `RuntimeError` generico no se distinguen
+sin leer el mensaje.
+
+**Consecuencia asumida:** `init_db()` ya no puede depender de `strategy`. Si no hay config,
+siembra el rol `general` con prompt vacio y avisa con `RuntimeWarning`. El esquema tiene que
+existir ANTES de que haya estrategia. Solo se traga `ConfigUnavailable`; un YAML corrupto
+sigue exploando, y hay test que lo fija, porque tragarse ese error convertiria un bug
+visible en un prompt de rol vacio silencioso.
