@@ -148,3 +148,85 @@ no depende de la copia local: si OneDrive vuelve a colocar los archivos, se rest
 eliminar de raíz la dependencia de OneDrive. Es reversible y no urgente ahora que hay red de
 seguridad en GitHub. Mientras tanto, evitar `Files On-Demand` / "Liberar espacio" sobre esta
 carpeta. Nota: el remoto quedó **público**; decidir si pasa a privado.
+### D-009 - `core/` es puro por construccion, y se comprueba con un test
+
+**Contexto:** la regla del monorepo es que `core/` no importa `adapters`, `api`,
+`agent`, MT5 ni ningun proveedor. En REF esa separacion no existia: `risk_engine.py`,
+`pattern_engine.py` y `market_view.py` vivian en la raiz junto a `app.py`.
+
+**Decision:** cada motor puro se mueve a `core/` y la regla se hace ejecutable en
+`tests/unit/test_core_purity.py`, que analiza el AST de cada modulo (imports prohibidos,
+llamadas a `open()`, referencias a la BD) y ademas comprueba el grafo de imports ya
+construido para cazar imports dinamicos que el AST no ve.
+
+**Por que un test y no una nota:** esa dependencia no rompe al compilar ni al ejecutar.
+Importar MT5 desde `core/` sigue dando los mismos numeros en la maquina que tiene MT5,
+y el nucleo deja de ser testeable fuera de ella sin que nada se entere. Solo se nota
+demasiado tarde. El test se ha verificado metiendo un modulo deliberadamente impuro en
+una carpeta temporal: salta en los cuatro checks.
+
+**Alternativa descartada:** un `test_paths.py` que solo compruebe que las rutas existen.
+No detecta que un modulo las recalcule por su cuenta.
+
+### D-010 - `OrderFlowEngine` recibe `symbol` y `fmt_ts` por inyeccion
+
+**Contexto:** en REF el engine vivia dentro de `app.py` y usaba la constante global
+`OF_SYMBOL` mas `tclock.fmt_utc` para las alertas. Eso fijaba el motor a un unico
+instrumento (6E) y arrastraba `tclock` -> `strategy` + MetaTrader5 al corazon del
+calculo de order flow.
+
+**Decision:** `symbol` es parametro de constructor (con ese 6E como default) y
+`fmt_ts` es un callable inyectado, con un formateo UTC local sin dependencias como
+default. Igual con `pick_cvd_source`: las etiquetas de fuente (`"live (Databento 6E)"`)
+se reciben por parametro en vez de estar escritas.
+
+**Por que importa:** un motor de order flow que dice "sintetico (tick volume MT5)" cuando
+la serie viene de B3, o que solo funciona con MT5 instalado, no es un motor: es la
+referencia con otro nombre. Los tests comprueban las dos cosas.
+
+### D-011 - Las fixtures JSONL y el feed sintetico van a `adapters/`, no a `core/`
+
+**Contexto:** `REF/mock_feed.py` genera las cintas deterministas de las fixtures y las
+consume el `MarketSimulator`.
+
+**Decision:** se porta a `adapters/synthetic_feed.py`. Los generadores son deterministas
+y no hablan con nadie, asi que tecnicamente podrian vivir en `core/`; pero son una
+FUENTE de datos, y la regla del monorepo manda la direccion de la dependencia
+`adapters -> core`, nunca al reves. Colocarlos en `core/` obligaria al nucleo a
+importar su propio generador de datos.
+
+**Efecto practico:** los tests si importan `adapters.synthetic_feed`; `core` no. La
+guardia de pureza lo verifica.
+
+### D-012 - `core/paths.py`: `DB_PATH` y `STRATEGY_PATH` se mueven a subdirectorios
+
+**Contexto:** en REF el `trading.db` y el `strategy.yaml` vivian sueltos en la raiz.
+El layout nuevo tiene `database/` y `config/`.
+
+**Decision:** `DB_PATH` pasa a `<root>/database/trading.db` y `STRATEGY_PATH` a
+`<root>/config/strategy.yaml`, componiendolos desde `PROJECT_DIR` en un solo sitio.
+
+**Por que no es un detalle menor:** un test que solo compruebe `startswith(PROJECT_DIR)`
+habria pasado con las dos layouts y no habria detectado el salto. `tests/unit/test_paths.py`
+comprueba la ruta EXACTA de ambas, y que no exista un `trading.db` suelto en la raiz: dos
+ficheros con el mismo nombre, uno con datos y otro vacio, son la forma mas silenciosa de
+perder el post-mortem.
+
+**Nota operativa:** `tests/conftest.py` conserva el canario que mide el hash del
+`trading.db` real antes y despues de toda la sesion y falla si cambio. Ahora mide
+`core.paths.DB_PATH`, asi que el guard sigue activo aunque `database/store.py` todavia
+no exista.
+
+### D-013 - `config/strategy.yaml` se copia byte-identico, y los tests leen las killzones de ahi
+
+**Contexto:** `tests/conftest.py` en REF sacaba las ventanas de killzone de
+`strategy.get_trading_config()`. El modulo `strategy` es de la Fase 6.
+
+**Decision:** `config/strategy.yaml` se copia tal cual (hash verificado) y el conftest lo
+lee con `yaml.safe_load`. Es el mismo dato por el camino corto.
+
+**Por que importa el detalle:** el comentario del REF era explicito en que tener una copia
+de las ventanas en los tests era justo lo que dejaba que los tests midieran una ventana
+distinta de la real. Leer el YAML directamente mantiene esa garantia sin el modulo
+intermedio. `test_risk_engine.py::test_defaults_match_strategy_yaml` sigue fijando que
+`risk_engine.DEFAULT_KILLZONES` coincide con el YAML.

@@ -37,14 +37,38 @@ Decisión registrada en `DECISIONS.md` (D-005).
 > "inalterados" sin publicar la grade en el OC consultado). Verificar antes de producción.
 
 ## Fase 1 – Núcleo (`core/`) – Agnóstico al Mercado
-- [ ] Mover `REF/risk_engine.py` → `core/risk_engine.py` (ajustar imports, validar lógica pura)
-- [ ] Crear `core/smc_engine.py` (extraer lógica pura de `REF/pattern_engine.py`, aislar I/O)
-- [ ] Crear `core/orderflow_engine.py` (extraer `OrderFlowEngine` app.py + cálculos `cvd_service.py`, feed-agnóstico + DI)
-- [ ] Mover `REF/simulator.py` → `core/simulator.py` (ajustar imports)
-- [ ] Crear `core/lot_calculator.py` (normalizador lotes/minis/USDT)
-- [ ] Verificar/mover `core/paths.py`, `core/trade_history.py` (integridad)
-- [ ] Verificar core sin imports de `adapters/api/agent` (regla unidireccional)
-- [ ] Ejecutar tests unitarios core (`pytest tests/unit -v`) → **VERDES**
+- [x] Mover `REF/risk_engine.py` → `core/risk_engine.py` (ajustar imports, validar lógica pura)
+- [x] Crear `core/smc_engine.py` (extraer lógica pura de `REF/pattern_engine.py`, aislar I/O)
+- [x] Crear `core/orderflow_engine.py` (extraer `OrderFlowEngine` app.py + cálculos `cvd_service.py`, feed-agnóstico + DI)
+- [x] Mover `REF/simulator.py` → `core/simulator.py` (ajustar imports)
+- [x] Crear `core/lot_calculator.py` (normalizador lotes/minis/USDT)
+- [x] Verificar/mover `core/paths.py`, `core/trade_history.py` (integridad)
+- [x] Verificar core sin imports de `adapters/api/agent` (regla unidireccional)
+- [x] Ejecutar tests unitarios core (`pytest tests/unit -v`) → **VERDES** (258 passed, 2 xfailed)
+
+### Añadido durante la ejecución (no estaba en el plan original)
+
+- [x] `core/orderflow_config.py` (constantes de calibración; era un fichero suelto en la raíz de REF)
+- [x] `core/market_view.py` (footprint/heatmap/barras por evento; pura, y `simulator.py` la necesita)
+- [x] `adapters/synthetic_feed.py` (desde `REF/mock_feed.py`; sin esto no hay fixtures deterministas)
+- [x] `config/strategy.yaml` (byte-idéntico a REF; `tests/conftest.py` lee las killzones de ahí)
+- [x] `tests/unit/test_core_purity.py` (guardia AST de la regla unidireccional)
+- [x] `tests/unit/test_paths.py` (adaptado: las rutas ahora son `config/` y `database/`, no la raíz)
+- [x] `tests/unit/test_lot_calculator.py`
+
+**Decisiones tomadas en esta fase**
+
+- `core/` NO importa `adapters`. `simulator.py` y `orderflow_config.py` quedan en `core/` porque son lógica pura; la fuente sintética (`synthetic_feed.py`) sí es un adaptador, y por eso `core` no la importa: solo la usan los tests.
+- `OrderFlowEngine` recibe `symbol` por constructor y `fmt_ts` por inyección. En REF el símbolo venía de una constante global y el timestamp de `tclock.fmt_utc`, que arrastraba `strategy` y MetaTrader5 al núcleo.
+- `pick_cvd_source` recibe las etiquetas de fuente por parámetro. En REF iban hardcodeadas (`"live (Databento 6E)"`), lo que mentía en cuanto el feed no era Databento.
+- `tests/conftest.py` lee `config/strategy.yaml` directamente en vez de `strategy.get_trading_config()`: mismo resultado, sin el módulo `strategy` (Fase 6). El canario de la DB real se conserva midiendo `core.paths.DB_PATH`.
+- **Tests pospuestos, no descartados**: `TestOfFeedGuard`, `TestSetupEvalSynthetic` y `TestRiskSetupSynthetic` (exercitan `app.py`), y todo lo de `store.py` / `strategy.py` / `smr_service.py`. Volverán en las fases de API y persistencia.
+- **Dos bugs reales encontrados por los tests** en `core/lot_calculator.py` (nuevo): `risk_value` reportaba `lots * tick_value`, que no es el riesgo de la posición (faltaba la distancia al SL); y un SL más fino que un tick devolvía un tamaño desproporcionado en vez de fallar. Ambos corregidos.
+
+**Pendiente de calibración (2 xfail, ambos de decisión de negocio, no de código roto)**
+
+- `test_missing_cvd`: `smr_dxy` pesa 15 y el fixture no trae SMR, así que el techo cae a 82.4 y 58.8 queda bajo el corte de MEDIA.
+- `test_sweep_and_reverse_favors_sell`: el COT pesa 0 desde `64883d3`, así que un COT bajista ya no empuja a ALTA.
 
 ## Fase 2 – Persistencia (`database/`)
 - [ ] Mover `REF/store.py` → `database/store.py` (ajustar imports `core.paths`)

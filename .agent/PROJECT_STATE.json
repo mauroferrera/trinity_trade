@@ -2,7 +2,7 @@
   "project_name": "MultiMarket Quant Engine",
   "version": "0.1.0",
   "active_phase": "Phase 1 - Nucleo (core/)",
-  "status": "ready_for_phase_1",
+  "status": "phase_1_core_complete_ready_for_phase_2",
   "last_updated": "2026-10-01T00:00:00Z",
   "blockers": [],
   "repo": {
@@ -22,17 +22,31 @@
     "requirements_txt",
     "config/asset_sources_map.yaml",
     "config/trading_hours.json",
-    "configs_parseable_validation"
-  ],
-  "in_progress": [],
-  "pending_modules": [
+    "configs_parseable_validation",
     "core/paths.py",
     "core/trade_history.py",
     "core/risk_engine.py",
     "core/smc_engine.py",
+    "core/orderflow_config.py",
     "core/orderflow_engine.py",
+    "core/market_view.py",
     "core/simulator.py",
     "core/lot_calculator.py",
+    "adapters/synthetic_feed.py",
+    "config/strategy.yaml",
+    "tests/conftest.py (killzones leidas del YAML, sin strategy.py/store.py)",
+    "tests/unit/test_risk_engine.py",
+    "tests/unit/test_trade_history.py",
+    "tests/unit/test_cvd_selector.py",
+    "tests/unit/test_orderflow.py",
+    "tests/unit/test_market_view.py",
+    "tests/unit/test_simulator.py",
+    "tests/unit/test_paths.py",
+    "tests/unit/test_lot_calculator.py",
+    "tests/unit/test_core_purity.py"
+  ],
+  "in_progress": [],
+  "pending_modules": [
     "database/store.py",
     "database/models.py",
     "adapters/base_adapter.py",
@@ -69,13 +83,12 @@
     "static/css/style.css",
     "static/js/main.js",
     "static/js/tools.js",
-    "tests/scenarios",
-    "config/strategy.yaml",
+    "tests/integration (posponer tests de app.py/store.py a sus fases)",
     "verify trading_hours.json session b3_fixed_income against B3 official schedule"
   ],
   "phase_status": {
     "phase_0_scaffolding": "completed",
-    "phase_1_core": "ready",
+    "phase_1_core": "completed",
     "phase_2_database": "pending",
     "phase_3_adapters": "pending",
     "phase_4_macro_ingestor": "pending",
@@ -101,6 +114,34 @@
     "chartism_engine_scope",
     "supporting_services_placement"
   ],
+  "phase_1_results": {
+    "tests": "258 passed, 2 xfailed (python -m pytest tests -q)",
+    "baseline_before_phase_1": "875 passed, 2 xfailed (suite de REF, no de este repo)",
+    "core_modules": [
+      "core/paths.py",
+      "core/trade_history.py",
+      "core/risk_engine.py",
+      "core/smc_engine.py",
+      "core/orderflow_config.py",
+      "core/orderflow_engine.py",
+      "core/market_view.py",
+      "core/simulator.py",
+      "core/lot_calculator.py"
+    ],
+    "purity_enforced_by": "tests/unit/test_core_purity.py (analisis AST + grafo de imports, verificado metiendo un modulo impuro de prueba)",
+    "not_ported_deliberately": [
+      "tests de app.py / strategy.py / store.py / smr_service.py (pertenecen a fases posteriores)",
+      "TestOfFeedGuard / TestSetupEvalSynthetic / TestRiskSetupSynthetic de test_orderflow.py (exercitan la API)"
+    ],
+    "known_bugs_found_and_fixed": [
+      "core/lot_calculator.py: risk_value reportaba lots*tick_value, que no es el riesgo real. Ahora risk_per_unit y risk_at_sl.",
+      "core/lot_calculator.py: un SL mas fino que un tick devolvia un tamanho desproporcionado en vez de fallar (sl_ticks < 1)"
+    ],
+    "pending_calibration": [
+      "test_missing_cvd (xfail): smr_dxy pesa 15 y el fixture no tiene SMR",
+      "test_sweep_and_reverse_favors_sell (xfail): el COT pesa 0 desde 64883d3"
+    ]
+  },
   "reference_code": {
     "path": "C:/Users/fmaur/Desktop/Trading",
     "writable": false,
