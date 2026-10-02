@@ -5,6 +5,14 @@
   "status": "ready_for_phase_1",
   "last_updated": "2026-10-01T00:00:00Z",
   "blockers": [],
+  "repo": {
+    "versioned": true,
+    "branch": "main",
+    "remote": "https://github.com/mauroferrera/trinity_trade.git",
+    "initial_commit": "5259978 chore: scaffolding inicial del monorepo Trinity (Fase 0)",
+    "visibility": "public (decidir si pasa a privado)",
+    "identity": "mauroferrera <trinity.brasil24@gmail.com> (config local al repo, sin tocar el global)"
+  },
   "completed_modules": [
     "project_structure_directories_created",
     "init_py_files_created",

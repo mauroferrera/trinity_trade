@@ -138,6 +138,13 @@ eliminado era recuperable ni único.
 tienen el atributo `ReparsePoint` de OneDrive, aunque su contenido está hidratado (los archivos
 son `Archive` normal y se leen/escriben con normalidad). El repo de referencia **no** tiene `.git`
 todavía; su único control de versiones está en `C:\Users\fmaur\Desktop\Trading\.git`.
-**Pendiente de decisión del usuario:** mover `Trinity_proyect/` a `C:\Users\fmaur\Desktop\` y
-inicializar git, para eliminar de raíz la dependencia de OneDrive. Hasta entonces, evitar
-`Files On-Demand` / "Liberar espacio" sobre esta carpeta.
+**Mitigación aplicada:** `Trinity_proyect/` se inicializó como repo git y se publicó en
+`https://github.com/mauroferrera/trinity_trade` (rama `main`, commit inicial
+`5259978 chore: scaffolding inicial del monorepo Trinity (Fase 0)`, 31 archivos). El trabajo ya
+no depende de la copia local: si OneDrive vuelve a colocar los archivos, se restauran con
+`git clone`. `.gitignore` excluye secretos, DBs, backups y cachés.
+
+**Pendiente de decisión del usuario:** mover `Trinity_proyect/` a `C:\Users\fmaur\Desktop\` para
+eliminar de raíz la dependencia de OneDrive. Es reversible y no urgente ahora que hay red de
+seguridad en GitHub. Mientras tanto, evitar `Files On-Demand` / "Liberar espacio" sobre esta
+carpeta. Nota: el remoto quedó **público**; decidir si pasa a privado.
