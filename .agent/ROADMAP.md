@@ -76,20 +76,23 @@ Ver `DECISIONS.md` (D-005) y `PROJECT_STATE.json` (`reference_code`).
 - [ ] **Tests:** unit tests adaptadores/base (mocks) pasan en verde
 
 ## Fase 4 – Macro/Ingestores (`macro_ingestor/`)
-**Estado:** Pendiente | **Prioridad:** Media-Alta
+**Estado:** Completa | **Prioridad:** Media-Alta
 
 **Hitos:**
-- [ ] `macro_ingestor/forex/cot_service.py` (desde `REF/cot_service.py`)
-- [ ] `macro_ingestor/forex/dxy_service.py` (desde `REF/smr_service.py`)
-- [ ] `macro_ingestor/forex/calendar_news.py` (desde `REF/ff_calendar.py`)
-- [ ] `macro_ingestor/b3/*` (5 esqueletos: bcb_focus, foreigner_flow, di_futures_yield, news_calendar, social_sentiment)
-- [ ] `macro_ingestor/crypto/*` (4 esqueletos: funding_rate, onchain_whales, liquidation_heatmap, fear_greed)
-- [ ] Evaluar `REF/decision_context.py` → ubicación por dominio (registrar en DECISIONS.md)
+- [x] `macro_ingestor/base_ingestor.py` (contrato, errores, caché con TTL, seam HTTP)
+- [x] `macro_ingestor/forex/cot_service.py` (desde `REF/cot_service.py`)
+- [x] `macro_ingestor/forex/dxy_service.py` (desde `REF/smr_service.py`)
+- [x] `macro_ingestor/forex/calendar_news.py` (desde `REF/ff_calendar.py`)
+- [x] `macro_ingestor/registry.py` (nombre del YAML → módulo real)
+- [x] Evaluar `REF/decision_context.py` → ubicación por dominio (registrado en DECISIONS.md, D-028)
+- [~] `macro_ingestor/b3/*` y `macro_ingestor/crypto/*` — **descartados**, no pendientes.
+      Las 8 fuentes no tienen contrato en REF; un esqueleto con esquema inventado es peor
+      que una ausencia declarada. Están en `registry.PENDIENTES` (D-026).
 
 **Criterios de Aceptación:**
-- [ ] Reubicación sin romper imports existentes (donde aplique)
-- [ ] Interfaces uniformes entre mercados (mínimo común)
-- [ ] **Tests:** unit tests ingestors (mocks HTTP) pasan en verde
+- [x] Reubicación sin romper imports existentes (donde aplique)
+- [x] Interfaces uniformes entre mercados (`MacroReading` único para los tres servicios)
+- [x] **Tests:** unit tests ingestors (mocks HTTP) pasan en verde — 89 en `test_macro_ingestor.py`, ninguno toca la red
 
 ## Fase 5 – Agente IA (`agent/`)
 **Estado:** Pendiente | **Prioridad:** Media

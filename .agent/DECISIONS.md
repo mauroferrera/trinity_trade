@@ -322,8 +322,8 @@ cerrar: si no, un cierre concurrente dejaria un `Future` corriendo contra un ter
 apagado.
 
 **Por que un hilo y no un lock:** el lock resuelve el acceso concurrente pero no el
-`initialize()`/`shutdown()` en la 때문이다. Un executor de un solo hilo da las dos cosas
-con un mecanismo, y hace que el orden de las llamadas sea FIFO y visible.
+`initialize()`/`shutdown()` a lo largo de la vida de la sesion. Un executor de un solo hilo
+da las dos cosas con un mecanismo, y hace que el orden de las llamadas sea FIFO y visible.
 
 **Consecuencia asumida:** las llamadas se serializan, asi que un stream lento bloquea a
 los demas. Es aceptable: MT5 no gana nada de ser llamado en paralelo, y el
@@ -418,3 +418,166 @@ puede entrar antes de que se le abra la puerta.
 **Refuerzo extra:** el test de concurrencia se ejecuta 20 veces seguidas. Un fallo de
 serializacion es intermitente por naturaleza y una sola pasada en verde no dice nada; el
 resultado de la repeticion se puede comprobar sin pytest-repeat.
+
+---
+
+# FASE 4 - MACRO / INGESTORES (2026-10-02)
+
+### D-022 - `IngestorError` es una jerarquia aparte, y una lectura degradada siempre dice si es vieja
+
+**Contexto:** `macro_ingestor/` se parece a `adapters/` porque los dos salen a la red, pero
+un fallo ahi no significa lo mismo. Si el broker no responde no se puede operar; si el proxy
+de Forex Factory esta caido se sigue operando con una parte del score en cero. Con una
+jerarquia unica, el `except AdapterError` que significa "el bróker no responde" se traga
+tambien "no se que dice el COT", y quien lo maneje le dira al usuario que abra una terminal
+que si funciona.
+
+**Decision:** `IngestorError` (con `FeedUnavailable` y `FeedUnreadable`) NO hereda de
+`AdapterError`. La lectura normalizada es `{"source", "asof_ts", "payload", "stale",
+"reason"}` y las dos ultimas no son opcionales en la practica:
+
+- `asof_ts` es la fecha del DATO, no la del fetch. Con un feed semanal del COT, la
+  diferencia es de hasta siete dias y confundirlos hace que un dato de la semana pasada
+  parezca fresco.
+- `stale` distingue el dato fresco del respaldo. REF servia la copia vencida de la cache
+  sin marcarlo, en los tres servicios: era la forma de que un `payload` viejo pareciese
+  actual.
+- `reason` es obligatorio tambien cuando no hay dato. `payload: None` sin motivo es
+  indistinguible de "no habia nada", y esa es justo la confusion que hay que evitar.
+
+`FeedUnreadable` existe separada de `FeedUnavailable` porque el fallo que mas se va a dar
+aqui no es de red: es de formato. Forex Factory no tiene API y se parsea markdown, asi que
+un cambio de maquetacion rompe el parseo, no la conexion.
+
+**Consecuencia asumida:** `asof_ts = 0` cuando no hay dato. Un COT caido vale 0.0 en
+`core/risk_engine.py` (asi esta ya, `DEFAULT_WEIGHTS["cot"] = 0.0`), no un numero inventado.
+
+### D-023 - El indice del COT sale de "Legacy Futures Only"; el TFF es solo detalle
+
+**Contexto:** la CFTC publica el mismo compromiso en tres informes. El clasico "COT index" de
+26 semanas se define sobre los No Comerciales del informe Legacy, y ese es el numero que
+todo el mundo cita. El TFF Moderno separa Asset Managers y Leveraged Money, que es mas
+detallado pero no es la misma serie.
+
+**Decision:**
+
+- El indice 0-100 se calcula sobre **No Comerciales de `Legacy Futures Only` (`6dca-aqww`)**.
+- TFF (`gpe5-46if`) se descarga para el delta de Asset Managers y de Leveraged Money, que
+  alimenta el score cuando no hay senal direccional clara.
+- Las dos fuentes se cruzan **por fecha de reporte**. Una fila que solo tiene una de las dos
+  se descarta; rellenar el hueco con `0` fabricaria un delta que no existe y el 0 en un delta
+  significa "sin cambio", que es informacion.
+- Las tres funciones puras (`_norm`, `build_report`, el cruce) no tocan la red: se testean
+  con series grabadas.
+
+**Por que el cruce descarta y no rellena:** un delta de 0 y un delta desconocido se parecen
+en el signo y son opuestos en el significado. El primero dice "el comercial no ha cambiado";
+el segundo dice "no lo sabemos". La serie resultante tiene huecos declarados en vez de ceros
+falsos.
+
+### D-024 - El SMR alinea por TIEMPO y rechaza los desfases constantes
+
+**Contexto:** REF comparaba `dxy[-1]` con `eurusd[-1]` por posicion. El DXY cotiza en la
+NYSE y el EURUSD no: sesiones, festivos y horas de cierre distintas. Por posicion, el
+"minimo nuevo" del DXY puede ser el maximo de hace tres dias, y la comparacion sale con
+signo invertido sin que nada falle.
+
+**Decision:**
+
+1. Se alinean por timestamp, no por indice, y se comparan solo las horas comunes.
+2. Las velas en curso se descartan antes de comparar: una vela que aun no ha cerrado puede
+   tener un minimo que luego no existe.
+3. Se busca el desfase constante (en velas) que mas solape da entre las dos series. Si el
+   mejor no es el desfase 0, el SMR **no se emite**: un proveedor etiqueta por apertura y el
+   otro por cierre, y realinear en silencio deja que el signo del desfase decida el resultado.
+4. Sin horas comunes no hay SMR. Se devuelve `confirmed=False` con el motivo escrito.
+5. La cache de velas es por timeframe. Una cache unica comparaba H1 con M15 y devolvia un
+   SMR calculado sobre dos ventanas distintas.
+
+**Por que no se "corrige" el desfase:** alinear un DXY desplazado contra el EURUSD para que
+las señales coincidan es ajustar el dato hasta que confirme lo que uno quiere. Ante la duda,
+`confirmed=False` y el sesgo de DXY pesa cero: es la unica conclusion honesta cuando las dos
+series no hablan de la misma hora.
+
+### D-025 - El gate de noticias es fail-open, y declara si esta suponiendo la hora
+
+**Contexto:** REF cerraba el trading cuando el calendario no se podia leer. Convertir una
+caida de un proxy de terceros en "no se opera nunca mas" es la peor de las dos lecturas
+posibles: el bot se queda parado sin que nadie entienda por que.
+
+**Decision:**
+
+- Si no hay dato de noticias, el gate devuelve `ok=True` con `fail_open=True` explicito. El
+  valor viaja en la lectura para que sea visible, no se deduce de la ausencia de datos.
+- El motivo va escrito. `fail_open` sin motivo es indistinguible de "no hay evento alto".
+- Si no se pudo leer el reloj del calendario, `timezone_assumed=True`. Un gate que crea
+  estar en la ventana correcta sin saber la hora es peor que uno que no sabe.
+- El buffer es simetrico (±15 min). Un buffer solo hacia adelante deja entrar la mitad del
+  riesgo, y el peor caso es operar DESPUES del dato, cuando el mercado ya lo ha descontado.
+- Impacto y titulo se leen por separado: un icono desconocido degrada el evento a `yel` en
+  vez de perder el evento entero.
+
+**Consecuencia asumida:** se puede operar a ciegas respecto a las noticias si el proxy lleva
+caido. Es una apuesta explicita y monitorizable (`fail_open=True` en el log), no un
+comportamiento oculto.
+
+### D-026 - Los ocho esqueletos de B3 y cripto NO se crean
+
+**Contexto:** `config/asset_sources_map.yaml` declara ocho fuentes mas: `bcb_focus`,
+`foreigner_flow`, `di_futures_yield`, `news_blackout`, `fear_and_greed_index`,
+`crypto_onchain_whales`, `funding_rate_monitor` y `liquidation_heatmap`. REF no tiene
+implementacion ni contrato para ninguna de las ocho.
+
+**Decision:** no se escriben esqueletos. Se declaran en `macro_ingestor/registry.PENDIENTES`
+y el bot no las consulta.
+
+**Por que un esqueleto aqui es peor que nada:** un esqueleto de adaptador devuelve
+`AdapterError`, asi que el fallo es visible. Un esqueleto de ingestor que devuelve
+`neutro(...)` parece una fuente que falla todos los dias, y uno que devuelve un esquema
+inventado parece una fuente que funciona con datos que no son los de la fuente. Un test
+con un fixture ficticio no distingue las tres cosas, porque las tres pasan el test.
+
+**Consecuencia asumida:** los activos B3 y cripto operan sin soft data hasta que haya
+contrato verificado. Es una ausencia declarada (`PENDIENTES`) y consultable
+(`registry.faltantes()`), no un silencio.
+
+### D-027 - `registry.py`: el YAML nombra conceptos y el codigo nombra servicios
+
+**Contexto:** `asset_sources_map.yaml` declara `cot_report`, `dxy_correlation` y
+`ecb_fed_calendar`. Los modulos se llaman `cot_service.py`, `dxy_service.py` y
+`calendar_news.py`. Sin una tabla que una las dos cosas, el YAML no ejecuta nada y no hay
+forma de notarlo: la fuente simplemente no aparece en el score.
+
+**Decision:** `macro_ingestor/registry.py` traduce nombre-de-YAML a modulo, con tres reglas:
+
+- Un nombre sin implementacion devuelve lectura **neutra con el motivo**, no se filtra. El
+  filtro en silencio es el fallo que hay que evitar.
+- Se distingue "pendiente" (en `PENDIENTES`, decidido) de "olvidado" (no esta en ninguna
+  parte): son errores distintos y el segundo se arregla, el primero no.
+- Una entrada del registro que no importa se reporta como **"registro roto"**, porque es un
+  bug de este repo y no una caida de la fuente.
+
+Hay un test que cruza `asset_sources_map.yaml` con el registro: anadir un
+`soft_data_sources` nuevo al mapa sin registrarlo en ninguna parte rompe la suite.
+
+**Alternativa descartada:** renombrar los modulos para que coincidan con el YAML. Acopla el
+nombre de un modulo a una config que puede cambiar, y `from macro_ingestor.forex import
+cot_report` sigue sin decir de donde sale el dato.
+
+### D-028 - `REF/decision_context.py` no es de esta fase
+
+**Contexto:** el plan pedia evaluar `decision_context.py` dentro de la Fase 4.
+
+**Evaluacion:** es logica pura (edad del snapshot, procedencia, spread como fraccion del
+stop, y las claves que lee la auditoria). No hace I/O y no depende de ningun proveedor: no
+es un ingestor.
+
+**Decision:** no entra en `macro_ingestor/`. Va a `core/decision_context.py` cuando exista el
+endpoint de auditoria que lo consume (Fase 6), donde sus claves exportadas tienen un lector.
+Portarlo ahora seria codigo sin consumidor y una decision sobre `STALE_SNAPSHOT_S` que
+depende de `scan_interval_sec` de `strategy.yaml`.
+
+**Lo que si se conserva de esa evaluacion:** el criterio de "caducidad" ya existe en la Fase
+4 con otro nombre. `TTLCache` marca el respaldo con `stale=True` y `MacroReading` lleva
+`asof_ts`; es la misma idea de "no me digas que esto es actual si no lo es", resuelta en la
+capa de I/O en vez de en la de contexto.

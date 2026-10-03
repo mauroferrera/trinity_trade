@@ -1,8 +1,8 @@
 {
   "project_name": "MultiMarket Quant Engine",
   "version": "0.1.0",
-  "active_phase": "Phase 3 - Adaptadores (adapters/)",
-  "status": "phase_3_adapters_complete_ready_for_phase_4",
+  "active_phase": "Phase 4 - Macro/Ingestores (macro_ingestor/)",
+  "status": "phase_4_macro_ingestor_complete_ready_for_phase_5",
   "last_updated": "2026-10-02T00:00:00Z",
   "blockers": [],
   "repo": {
@@ -63,22 +63,18 @@
     "tests/unit/mt5_fake.py",
     "tests/unit/test_base_adapter.py",
     "tests/unit/test_mt5_forex.py",
-    "tests/unit/test_adapter_skeletons.py"
-  ],
-  "in_progress": [],
-  "pending_modules": [
+    "tests/unit/test_adapter_skeletons.py",
+    "macro_ingestor/base_ingestor.py",
     "macro_ingestor/forex/cot_service.py",
     "macro_ingestor/forex/dxy_service.py",
     "macro_ingestor/forex/calendar_news.py",
-    "macro_ingestor/b3/bcb_focus_service.py",
-    "macro_ingestor/b3/foreigner_flow.py",
-    "macro_ingestor/b3/di_futures_yield.py",
-    "macro_ingestor/b3/news_calendar.py",
-    "macro_ingestor/b3/social_sentiment.py",
-    "macro_ingestor/crypto/funding_rate_service.py",
-    "macro_ingestor/crypto/onchain_whales.py",
-    "macro_ingestor/crypto/liquidation_heatmap.py",
-    "macro_ingestor/crypto/fear_greed.py",
+    "macro_ingestor/registry.py",
+    "tests/unit/test_macro_ingestor.py"
+  ],
+  "in_progress": [],
+  "pending_modules": [
+    "macro_ingestor/b3/* y macro_ingestor/crypto/* (NO son pendientes: descartados por D-026, sin contrato en REF. Declarados en registry.PENDIENTES y consultables con registry.faltantes())",
+    "core/decision_context.py (puro, de REF/decision_context.py; entra con el endpoint de auditoria en la Fase 6 segun D-028)",
     "agent/prompt_templates.py",
     "agent/laya_bridge.py",
     "api/app.py",
@@ -101,7 +97,7 @@
     "phase_1_core": "completed",
     "phase_2_database": "completed",
     "phase_3_adapters": "completed",
-    "phase_4_macro_ingestor": "pending",
+    "phase_4_macro_ingestor": "completed",
     "phase_5_agent": "pending",
     "phase_6_api_frontend": "pending",
     "phase_7_validation": "pending"
@@ -125,6 +121,7 @@
   ],
   "decisions_phase_2": ["D-014", "D-015", "D-016"],
   "decisions_phase_3": ["D-017", "D-018", "D-019", "D-020", "D-021"],
+  "decisions_phase_4": ["D-022", "D-023", "D-024", "D-025", "D-026", "D-027", "D-028"],
   "phase_1_results": {
     "tests": "258 passed, 2 xfailed (python -m pytest tests -q)",
     "baseline_before_phase_1": "875 passed, 2 xfailed (suite de REF, no de este repo)",
@@ -219,6 +216,48 @@
     ],
     "tests_added": "test_base_adapter.py (45), test_mt5_forex.py (40), test_adapter_skeletons.py (35)",
     "concurrency_test": "El test de serializacion se ejecuto 20 veces seguidas sin intermitencia (python -m pytest tests/unit/test_mt5_forex.py::TestLaSesionEsLaUnicaPuerta en bucle)"
+  },
+  "phase_4_results": {
+    "tests": "556 passed, 2 xfailed (python -m pytest tests -q)",
+    "tests_added": "test_macro_ingestor.py: 89 (77 de cot/dxy/calendar + 12 de registry). Ninguno toca la red.",
+    "modules": [
+      "macro_ingestor/base_ingestor.py (IngestorError/FeedUnavailable/FeedUnreadable, reading(), neutro(), TTLCache con now inyectable, http_text(), seam opener)",
+      "macro_ingestor/forex/cot_service.py (CFTC Socrata TFF + Legacy, cruce por fecha, indice de 26 semanas)",
+      "macro_ingestor/forex/dxy_service.py (Yahoo DX-Y.NYB, align_on_time, _best_shift, detect_smr, swing_break)",
+      "macro_ingestor/forex/calendar_news.py (Forex Factory via r.jina.ai, parseo puro, gate fail-open)",
+      "macro_ingestor/registry.py (nombre del YAML -> modulo, PENDIENTES, faltantes())"
+    ],
+    "normalized_shape": "{source, asof_ts, payload, stale, reason}. asof_ts es la fecha del DATO, no la del fetch; stale distingue el respaldo; reason es obligatorio incluso sin payload.",
+    "decisions": {
+      "D-022": "IngestorError NO hereda de AdapterError: 'no se que dice el COT' y 'el broker no responde' llevan a acciones distintas",
+      "D-023": "El indice del COT sale de Legacy Futures Only (No Comerciales); el TFF es solo detalle. El cruce por fecha descarta filas incompletas en vez de rellenarlas con 0",
+      "D-024": "El SMR alinea por timestamp, descarta la vela en curso y NO se emite si hay desfase constante entre las dos series",
+      "D-025": "El gate de noticias es fail-open con fail_open=True explicito, declara timezone_assumed y usa buffer simetrico",
+      "D-026": "Los ocho esqueletos B3/cripto NO se crean: sin contrato en REF, un esquema inventado es peor que una ausencia declarada",
+      "D-027": "registry.py traduce los nombres del YAML a modulos y reporta lo que no resuelve en vez de filtrarlo en silencio",
+      "D-028": "REF/decision_context.py no es de esta fase: es puro, va a core/ con el endpoint de auditoria (Fase 6)"
+    },
+    "bugs_found_in_ref": [
+      "REF/cot_service._fetch devolvia [] cuando la CFTC caia. [] es una lista valida de cero reportes: 'no dice nada' y 'no lo se leer' se confundian. Ahora propaga FeedUnavailable y poll() degrada con el motivo.",
+      "REF/smr_service comparaba dxy[-1] con eurusd[-1] POR POSICION. Con un festivo en Nueva York el DXY va un dia por detras y la divergencia sale con el signo invertido sin que nada falle.",
+      "REF/smr_service tenia UNA sola cache de velas: al pedir H1 y M15 comparaba ventanas distintas y devolvia un SMR 'correcto' sobre datos que no se corresponden.",
+      "REF/ff_calendar cerraba el trading si no podia leer el calendario: una caida de un proxy de terceros se convertia en 'no se opera nunca mas'.",
+      "Las tres caches de REF (smr_service, ff_calendar, cot_service) servian la copia vencida SIN marcar que era vencida."
+    ],
+    "known_limits": [
+      "Forex Factory no tiene API: se parsea markdown de un proxy (r.jina.ai). Un cambio de maquetacion rompe el parseo, no la red, y por eso FeedUnreadable es un tipo aparte. El impacto se lee del nombre del icono del PNG: si FF renombra el fichero, todo pasa a 'bajo' y el gate deja de bloquear sin avisar. Mitigado en parte: un icono desconocido degrada a 'yel' en vez de perder el evento.",
+      "El gate fail-open permite operar sin visibilidad de noticias si el proxy lleva caido. Es una apuesta explicita y monitorizable (fail_open=True en la lectura), no un comportamiento oculto.",
+      "El COT solo tiene sentido para EURUSD: core/risk_engine.py usa DEFAULT_WEIGHTS['cot'] = 0.0 y el resto de pares no lo consultan.",
+      "El DXR/SMR usa el DXY de Yahoo para todos los pares forex porque el pesos smr_dxy = 15 es global. Con mas pares habra que decidir si el sesgo es por simbolo."
+    ],
+    "not_implemented_deliberately": [
+      "macro_ingestor/b3/* y macro_ingestor/crypto/*: las 8 fuentes que declara asset_sources_map.yaml no tienen contrato ni endpoint de referencia. Ver D-026.",
+      "core/decision_context.py: puro y sin consumidor hasta que exista el endpoint de auditoria. Ver D-028."
+    ],
+    "pending_calibration": [
+      "test_missing_cvd (xfail): smr_dxy pesa 15 y el fixture no tiene SMR",
+      "test_sweep_and_reverse_favors_sell (xfail): el COT pesa 0 desde 64883d3"
+    ]
   },
   "reference_code": {
     "path": "C:/Users/fmaur/Desktop/Trading",

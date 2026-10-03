@@ -475,7 +475,7 @@ class TestJournal:
         El prompt del rol sale del YAML, así que sembrarlo sin config es
         imposible... pero que eso tumbe `init_db()` sería al revés de lo
         razonable: el esquema tiene que existir ANTES de que haya estrategia.
-        Se comprueban las tres cosas: que noPetna, que avisa, y que la fila
+        Se comprueban las tres cosas: que no tumba, que avisa, y que la fila
         existe igual para poder rellenarla más adelante.
         """
         store.set_config_source(None)  # el default lazy: strategy no existe

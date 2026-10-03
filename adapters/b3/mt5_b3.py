@@ -99,7 +99,7 @@ def contrato_base(symbol: str) -> str:
     Lo que NO resuelve, y conviene no prometer: los contratos futuros de B3 sin
     separador (`WINFUT26`, `WINQ26`, `INDZ26`) se devuelven tal cual. No hay
     separador donde cortar y adivinar dónde acaba el nombre del subyacente
-    (`WIN` vs `WING` vs `WINZ`) es unParser de exchange, no una normalización.
+    (`WIN` vs `WING` vs `WINZ`) es un parser de exchange, no una normalización.
     Si de verdad hace falta, la respuesta correcta es un mapa declarado por
     símbolo en la config, no una heurística.
 

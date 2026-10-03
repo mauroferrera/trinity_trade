@@ -6,10 +6,9 @@ Núcleo determinista agnóstico al mercado + adaptadores por proveedor + capa de
 explicabilidad con LLM. Un único monorepo; la activación de fuentes es dinámica
 vía `config/asset_sources_map.yaml`.
 
-> **Estado:** Fase 0 (scaffolding + configuración) completada. La migración del
-> núcleo (`core/`) está planificada pero **bloqueada**: el código de referencia
-> `REF/` no está disponible en disco. Ver [Estado real](#estado-real) y
-> `.agent/PROJECT_STATE.json`.
+> **Estado:** Fases 0–4 completadas. `core/`, `database/`, `adapters/` y
+> `macro_ingestor/` están implementados y verificados por tests. Siguiente: Fase 5
+> (`agent/`). Ver [Estado real](#estado-real) y `.agent/PROJECT_STATE.json`.
 
 ---
 
@@ -174,15 +173,28 @@ Ninguna suite unitaria debe depender de MT5: los adaptadores se prueban con mock
   `forex/mt5_forex.py` (**una sola sesión MT5 por proceso**, con un único hilo y
   cierre que drena lo que está en vuelo) y esqueletos para B3 (3), cripto (2) y
   Databento. La suite no necesita terminal: todo se prueba con un doble.
+- **Fase 4 · `macro_ingestor/`** — `base_ingestor.py` (contrato `MacroReading`,
+  `IngestorError` independiente de `AdapterError`, caché con TTL y reloj inyectable),
+  los tres servicios Forex (`cot_service` CFTC, `dxy_service` Yahoo + SMR alineado por
+  tiempo, `calendar_news` Forex Factory con gate *fail-open*) y `registry.py`, que
+  traduce los nombres de `asset_sources_map.yaml` a módulos reales y **reporta en vez
+  de filtrar** lo que no resuelve. Ningún test toca la red.
 
-Suite completa: **467 passed, 2 xfailed** (`pytest tests -q`). Los dos `xfail` son
+Suite completa: **556 passed, 2 xfailed** (`pytest tests -q`). Los dos `xfail` son
 decisiones de calibración heredadas de la Fase 1, no código roto.
 
 ### Pendiente
 
-`macro_ingestor/`, `agent/`, `api/` y `static/` están aún sin implementar. Los cinco
-adaptadores de B3 y cripto están en **esqueleto**: faltan elegir proveedor (decisión de
-negocio), no código.
+`agent/`, `api/` y `static/` están aún sin implementar. Los cinco adaptadores de B3 y
+cripto están en **esqueleto**: faltan elegir proveedor (decisión de negocio), no código.
+
+Las ocho fuentes macro de B3 y cripto que declara `asset_sources_map.yaml`
+(`bcb_focus`, `foreigner_flow`, `di_futures_yield`, `news_blackout`,
+`fear_and_greed_index`, `crypto_onchain_whales`, `funding_rate_monitor`,
+`liquidation_heatmap`) **no tienen implementación a propósito**: la referencia no
+tiene contrato ni endpoint para ninguna, y un esquema inventado es peor que una
+ausencia declarada. Están en `macro_ingestor/registry.PENDIENTES` y se pueden listar
+con `registry.faltantes()`. Ver D-026.
 
 ### Código de referencia (restaurado)
 

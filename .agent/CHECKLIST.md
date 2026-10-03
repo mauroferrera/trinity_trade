@@ -138,14 +138,86 @@ Tres ciclos de vida para un terminal que es un recurso de proceso es la forma de
 - `test_adapter_skeletons.py` fija el contrato de los cinco: 35 tests.
 - Import de los seis módulos de adaptadores sin abrir terminal, y sin que ninguno tire al importarse.
 
-## Fase 4 – Macro/Ingestores (`macro_ingestor/`)
-- [ ] `macro_ingestor/forex/cot_service.py` (desde Trading)
-- [ ] `macro_ingestor/forex/dxy_service.py` (desde REF/smr_service)
-- [ ] `macro_ingestor/forex/calendar_news.py` (desde REF/ff_calendar)
-- [ ] Esqueletos `macro_ingestor/b3/*` (5 archivos)
-- [ ] Esqueletos `macro_ingestor/crypto/*` (4 archivos)
-- [ ] Evaluar `REF/decision_context.py` → registrar decisión en `DECISIONS.md`
-- [ ] Tests ingestors (mocks HTTP) → VERDES
+## Fase 4 – Macro/Ingestores (`macro_ingestor/`) - COMPLETA
+- [x] `macro_ingestor/base_ingestor.py` (contrato, jerarquía de errores, caché con TTL y seam HTTP)
+- [x] `macro_ingestor/forex/cot_service.py` (desde REF/cot_service)
+- [x] `macro_ingestor/forex/dxy_service.py` (desde REF/smr_service)
+- [x] `macro_ingestor/forex/calendar_news.py` (desde REF/ff_calendar)
+- [x] `macro_ingestor/registry.py` (nombre del YAML → módulo real)
+- [x] Evaluar `REF/decision_context.py` → decisión registrada (D-028: es puro, va a `core/` en la Fase 6)
+- [x] Tests ingestores (mocks HTTP) → VERDES
+- [ ] Esqueletos `macro_ingestor/b3/*` — **descartados, no pendientes** (D-026)
+- [ ] Esqueletos `macro_ingestor/crypto/*` — **descartados, no pendientes** (D-026)
+
+**El error que la fase tenía que evitar: el respaldo viejo sin marcar**
+
+REF tenía tres versiones de la misma caché y las tres servían la copia vencida **sin decir
+que era vencida**. Un `payload` de la semana pasada con `reason: ""` es indistinguible de uno
+de hace un minuto, y quien lo lee no tiene forma de notarlo. Ahora `stale` y `reason` viajan
+siempre en la lectura, incluso cuando no hay dato.
+
+`IngestorError` no hereda de `AdapterError` (D-022): "no sé qué dice el COT" y "el bróker no
+responde" llevan a acciones distintas, y un solo `except` las Mezclaría.
+
+**COT: el índice sale de Legacy Futures Only, no del TFF**
+
+El índice clásico de 26 semanas se define sobre los No Comerciales de `Legacy Futures Only`;
+el TFF Moderno da el detalle (Asset Managers, Leveraged Money) que alimenta el score cuando no
+hay señal direccional clara. Las dos se cruzan por fecha de reporte y una fila incompleta **se
+descarta**: rellenar con `0` fabricaría un delta, y en un delta el `0` significa "sin cambio",
+no "no lo sé".
+
+Bug de REF corregido: `_fetch()` devolvía `[]` cuando la CFTC caía, y `[]` es una lista válida
+de cero reportes. El sistema leía "el COT no dice nada" donde la verdad era "no lo supe leer".
+
+**DXY: alinear por tiempo, y callar antes que desviar**
+
+Comparar `dxy[-1]` con `eurusd[-1]` **por posición** compara el DXY de hoy con el EURUSD de hace
+tres días cuando hay un festivo en Nueva York, y la divergencia sale con el signo invertido sin
+que nada falle. Ahora se alinean por timestamp y, si las dos fuentes están desplazadas una vela
+de forma constante (apertura contra cierre), **no se emite SMR**. Un desfase constante significa
+que las dos series no describen la misma ventana; realinearlo en silencio deja que el signo
+decida el resultado. Ante la duda: `confirmed=False`.
+
+La caché de velas es por timeframe. Una única caché comparaba H1 con M15 y devolvía un SMR
+"correcto" calculado sobre dos ventanas que no se corresponden.
+
+**Calendario: fail-open, con la hora declarada**
+
+El fallo que motiva la decisión es de REF: cerraba el trading cuando el calendario no se podía
+leer. Una caída de un proxy de terceros convertida en "no se opera nunca más" deja el bot
+parado sin explicación. Ahora devuelve `ok=True` con `fail_open=True` **explícito**, y si no se
+pudo leer el reloj del calendario marca `timezone_assumed=True`. Un gate que cree estar en la
+ventana correcta sin saber la hora es peor que uno que no sabe.
+
+El buffer es simétrico (±15 min): uno solo hacia adelante deja entrar la mitad del riesgo.
+
+**El puente con la configuración (D-027)**
+
+`asset_sources_map.yaml` nombra conceptos (`cot_report`, `dxy_correlation`,
+`ecb_fed_calendar`) y el código se llama servicios (`cot_service`, `dxy_service`,
+`calendar_news`). Sin una tabla que una ambas cosas, el YAML no ejecuta nada y no hay forma de
+notarlo. `registry.py` la hace, y **no filtra en silencio**: un nombre sin implementación vuelve
+como neutro con el motivo, y se distingue "pendiente" (decidido) de "olvidado" (bug).
+
+Hay un test que cruza el YAML con el registro: añadir un `soft_data_sources` nuevo sin
+registrarlo rompe la suite.
+
+**Por qué no hay ocho esqueletos B3/cripto (D-026)**
+
+REF no tiene contrato ni endpoint para ninguna de las ocho fuentes que declara el YAML. Un
+esqueleto de adaptador falla visiblemente; un esqueleto de ingestor que devuelve `neutro(...)`
+parece una fuente rota a diario, y uno que devuelve un esquema inventado parece una fuente que
+funciona. Un test con un fixture ficticio pasa en los tres casos, así que el test no protege de
+nada. Se declaran en `registry.PENDIENTES` y son consultables con `registry.faltantes()`.
+
+**Verificación**
+
+- `test_macro_ingestor.py`: 89 tests (77 de los tres servicios + 12 del registro).
+- Suite completa: `556 passed, 2 xfailed` (los xfail siguen siendo los de calibración heredados
+  de la Fase 1).
+- Ningún test toca la red: el `opener` se inyecta siempre, y donde hace falta un `poll` se
+  inyecta uno falso.
 
 ## Fase 5 – Agente IA (`agent/`)
 - [ ] Crear `agent/prompt_templates.py`
