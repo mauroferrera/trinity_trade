@@ -1,0 +1,49 @@
+{
+  "fixture": "orderflow_6e_real.jsonl",
+  "built_at_utc": "2026-10-06T12:57:38+00:00",
+  "built_by": "research/build_real_fixture.py",
+  "source_parquet": "GLBX_6EZ6_trades_2026-10-05_2026-10-06_20261006T123439Z.parquet",
+  "source_parquet_sha256": "464e1db259498ce72ffd8a72cbc0f5e8431883f45e4f6adbcd9084906d96d38d",
+  "databento": {
+    "dataset": "GLBX.MDP3",
+    "schema": "trades",
+    "requested_symbol": "6EZ6",
+    "resolved_symbol": "6EZ6",
+    "identity_symbol": "6E.c.0",
+    "window_start_utc": "2026-10-05T10:00:00+00:00",
+    "window_end_utc": "2026-10-05T18:00:00+00:00",
+    "downloaded_at_utc": "2026-10-06T12:34:46.104787+00:00",
+    "cost_usd": 0.063984274864
+  },
+  "rows": 21926,
+  "rows_en_parquet": 51118,
+  "bytes": 1497250,
+  "sha256_lf": "f58029a3bc004e3e3d56b5e16c767c4b4f876a50961b5bf56eadc32cb6bed29f",
+  "stats": {
+    "cinta": {
+      "trades": 21926,
+      "media_size": 4.156,
+      "mediana_size": 2.0,
+      "max_size": 230,
+      "precios_distintos": 64,
+      "trades_size_ge_75": 16,
+      "vol_300_media": 1249,
+      "vol_300_min": 837,
+      "vol_300_max": 2354
+    },
+    "motor": {
+      "zscore_threshold": 4.5043,
+      "zscore_techo": 4.9497,
+      "prints_z_ge_2_5": 631,
+      "prints_z_ge_4_5": 61,
+      "prints_z_ge_4_5_con_gate_size": 8,
+      "spikes": 8,
+      "zonas_spike": 8,
+      "zonas_absorcion": 1,
+      "prints_z_ge_5_0": 0,
+      "cvd": -2420.0,
+      "buy_vol": 44357.0,
+      "sell_vol": 46777.0
+    }
+  }
+}

@@ -2,10 +2,18 @@
 
 Provides:
   - load_scenario(name): load JSON from tests/scenarios/
-  - make_candles(base_price, count, bias, spread): deterministic OHLCV generation
+  - make_candles(base_price, count, bias, spread, digits): deterministic OHLCV
   - make_cvd_from_candles(candles): convert candles to CVD [{time, value}] format
   - make_snapshot_from_scenario(scenario, current_price): build a full mock snapshot
     matching the shape the chart snapshot builder returns
+  - make_symbol_spec(scenario): SymbolSpec del bloque `market` del escenario
+
+Los scenarios cubren forex, B3 y cripto. Los de B3/cripto anaden el bloque
+`market` (digits, point, tick, contract_size, lot_calculator) porque la forma
+normalizada de una vela es la misma en los tres mercados pero su UNIDAD no: WIN
+cotiza a 0 decimales en puntos de 5 y BTCUSDT a 1 decimal en tick de 0.1. Los
+scenarios de forex no lo traen y todo lo que dependa de el se queda en los
+defaults de 5 decimales.
 
 Diferencias respecto a la referencia:
 
@@ -65,6 +73,7 @@ def make_candles(
     bias: str = "bullish",
     spread: float = 0.0003,
     seed_increment: float = 0.00015,
+    digits: int = 5,
 ) -> List[Dict[str, Any]]:
     """Generate deterministic OHLCV candle array.
 
@@ -75,6 +84,12 @@ def make_candles(
 
     Returns list of {time, open, high, low, close, volume}.
     time is sequential epoch starting at 1000000 (arbitrary, tests don't use real time).
+
+    `digits` son los decimales de la cotizacion del simbolo (D-048). Redondear a 5
+    estaba bien para EURUSD y es una trampa en B3 y cripto: el minicontrato de WIN
+    cotiza a 0 decimales y BTCUSDT a 1, asi que un `round(x, 5)` deja la serie con
+    decimales que ningun feed emitiria. El default 5 conserva intactos los
+    scenarios de forex.
     """
     candles: List[Dict[str, Any]] = []
     price = base_price
@@ -102,10 +117,10 @@ def make_candles(
 
         candles.append({
             "time": t,
-            "open": round(o, 5),
-            "high": round(h, 5),
-            "low": round(l, 5),
-            "close": round(c, 5),
+            "open": round(o, digits),
+            "high": round(h, digits),
+            "low": round(l, digits),
+            "close": round(c, digits),
             "volume": 500 + i * 50,
         })
         price = c
@@ -147,24 +162,38 @@ def make_trades(
     side_bias: Optional[float] = None,
     size_range: tuple = (4, 7),
     seed: int = 0,
+    jitter: Optional[float] = None,
+    digits: int = 5,
+    tick_size: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """Generate deterministic order-flow trades [{ts, price, size, side}].
 
     side_bias = probability of "A" (buy aggressor). When None -> 50/50.
     `side` comes from a local random.Random(seed): same args -> same sequence.
+
+    `jitter` es el ruido de precio por tick. Por defecto es una fraccion del precio
+    (0.004%), que es la escala del forex; en BTCUSDT o WIN hay que pasar la unidad
+    real del tick porque 0.004% de 65000 son 2.6 puntos de ruido (D-048).
+
+    `tick_size`, si se pasa, engancha la serie a la rejilla de cotizacion. Sin eso
+    el WIN (0 decimales, punto de 5) produce 129998, un precio que ningun feed
+    emite: la serie parece real y no lo es.
     """
     import random
 
     rng = random.Random(seed)
     price = base_price
+    noise = jitter if jitter is not None else abs(base_price) * 0.00004
     trades: List[Dict[str, Any]] = []
     for i in range(count):
         side = "A" if rng.random() < (side_bias if side_bias is not None else 0.5) else "B"
         size = rng.randint(*size_range)
-        price += rng.uniform(-base_price * 0.00004, base_price * 0.00004)
+        price += rng.uniform(-noise, noise)
+        if tick_size:
+            price = round(round(price / tick_size) * tick_size, digits)
         trades.append({
             "ts": 1_700_000_000 + i,
-            "price": round(price, 5),
+            "price": round(price, digits),
             "size": size,
             "side": side,
         })
@@ -187,10 +216,17 @@ def make_falling_cvd(count: int = 20, start: float = 500.0, step: float = 120.0)
 
 def make_snapshot_from_scenario(
     scenario: Dict[str, Any],
-    current_price: float = 1.1045,
+    current_price: Optional[float] = None,
     killzones: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
-    """Build a full mock snapshot dict matching the shape the chart snapshot returns."""
+    """Build a full mock snapshot dict matching the shape the chart snapshot returns.
+
+    `current_price` sale del escenario salvo que se pase explicitamente (el kwarg
+    gana). Si no esta en ninguno de los dos se levanta ValueError: antes el default
+    era 1.1045 y un scenario de BTCUSDT sin precio se colaba valuing en 1.1045
+    contra un SL de 400 puntos, que es un plan sin sentido en lugar de un fallo
+    visible (D-048).
+    """
     direction = scenario.get("direction", "BUY")
     now_str = scenario.get("now_utc", "2026-09-07T14:15:00Z")
     now_dt = datetime.fromisoformat(now_str.replace("Z", "+00:00"))
@@ -200,12 +236,27 @@ def make_snapshot_from_scenario(
     cvd = scenario.get("cvd")
     patterns = scenario.get("patterns", {"fvgs": [], "order_blocks": [], "sweeps": []})
 
+    market = scenario.get("market") or {}
+    digits = int(market.get("digits", 5))
+
+    if current_price is None:
+        current_price = scenario.get("current_price")
+    if current_price is None:
+        raise ValueError(
+            f"El scenario {scenario.get('name')!r} no trae current_price: un snapshot "
+            f"sin precio no es un snapshot. Pasalo por el escenario o por el kwarg."
+        )
+    current_price = float(current_price)
+
     # Generate candles from scenario params or use provided ones
     candle_params = scenario.get("candle_params", {})
     candles = make_candles(
         base_price=candle_params.get("base_price", current_price - 0.001),
         count=candle_params.get("count", 20),
         bias=candle_params.get("bias", "bullish"),
+        spread=candle_params.get("spread", 0.0003),
+        seed_increment=candle_params.get("seed_increment", 0.00015),
+        digits=digits,
     )
 
     # Compute risk engine for both directions
@@ -223,12 +274,12 @@ def make_snapshot_from_scenario(
 
     if direction == "BUY":
         entry = current_price
-        sl = round(entry - sl_dist, 5)
-        tp = round(entry + sl_dist * tp_r, 5)
+        sl = round(entry - sl_dist, digits)
+        tp = round(entry + sl_dist * tp_r, digits)
     else:
         entry = current_price
-        sl = round(entry + sl_dist, 5)
-        tp = round(entry - sl_dist * tp_r, 5)
+        sl = round(entry + sl_dist, digits)
+        tp = round(entry - sl_dist * tp_r, digits)
 
     # Build the snapshot matching the chart snapshot shape
     snap = {
@@ -236,8 +287,11 @@ def make_snapshot_from_scenario(
         "timeframe": scenario.get("timeframe", "M15"),
         "time": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
         "current_price": current_price,
-        "PDH": round(current_price + 0.003, 5),
-        "PDL": round(current_price - 0.003, 5),
+        # El rango del dia se deriva de la distancia del SL del escenario en vez de
+        # un 0.003 fijo: en EURUSD da 0.003 (lo que ponia antes) y en BTCUSDT da 800,
+        # que es un rango creible, mientras que 0.003 sobre 65000 seria ruido.
+        "PDH": round(current_price + sl_dist * 2, digits),
+        "PDL": round(current_price - sl_dist * 2, digits),
         "recent_candles": [
             {"time": datetime.fromtimestamp(c["time"]).strftime("%H:%M"),
              "close": c["close"], "high": c["high"], "low": c["low"], "volume": c["volume"]}
@@ -267,6 +321,34 @@ def make_snapshot_from_scenario(
     return snap
 
 
+def make_symbol_spec(scenario: Dict[str, Any]):
+    """Construye el `SymbolSpec` del escenario a partir de su bloque `market`.
+
+    Es el puente entre el JSON y las tres cosas que dependen de como cotiza un
+    simbolo: la unidad de presentacion (`pip`/punto), el redondeo de los niveles y
+    el calculador de lotes. Los scenarios de forex no traen bloque `market` y
+    devuelven None: sus specs vienen del bróker real, no de un JSON de test.
+    """
+    from adapters.base_adapter import SymbolSpec  # perezoso: solo los tests de mercado
+
+    market = scenario.get("market") or {}
+    if not market:
+        return None
+    spec = SymbolSpec(
+        symbol=scenario.get("symbol", market.get("symbol", "?")),
+        digits=int(market.get("digits", 5)),
+        point=float(market.get("point", 0.00001)),
+        contract_size=float(market.get("contract_size", 0.0)),
+        tick_size=float(market.get("tick_size", market.get("point", 0.00001))),
+        tick_value=float(market.get("tick_value", 0.0)),
+        volume_min=float(market.get("volume_min", 0.01)),
+        volume_max=float(market.get("volume_max", 100.0)),
+        volume_step=float(market.get("volume_step", 0.01)),
+        pip_override=float(market.get("pip_override", 0.0)),
+    )
+    return spec
+
+
 # ---------------------------------------------------------------------------
 # Parametrized scenario fixture for pytest
 # ---------------------------------------------------------------------------
@@ -278,6 +360,9 @@ ALL_SCENARIOS = [
     "no_rr_reject",
     "missing_cvd",
     "contradicting_cot",
+    "b3_win_mini",
+    "b3_wdo_mini",
+    "crypto_btc_perp",
 ]
 
 

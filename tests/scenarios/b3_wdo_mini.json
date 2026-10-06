@@ -1,0 +1,67 @@
+{
+  "name": "B3 minicontrato de dolar (WDO): 5,850 con 3 decimales y pip_override",
+  "description": "Misma confluencia que b3_win_mini pero con un fallo de R:R (tp_ratio 1.5 < min_rr 2.0), para que el gate rechace en unidades de la B3. Ademas es el caso donde la regla de digitos de forex se equivoca: el bróker publica 3 decimales, asi que 'pip' se calcularia como point*10 = 0.01, pero la unidad negociable del minicontrato de dolar es el punto de 0.001. Con pip_override el SL de 0.030 son 30 puntos y no 3 'pips', y la etiqueta debe decir puntos, no pips.",
+  "direction": "BUY",
+  "now_utc": "2026-09-08T14:00:00Z",
+  "symbol": "WDO",
+  "timeframe": "M15",
+  "market": {
+    "market_type": "B3_FUTURES",
+    "session_id": "b3_mini_usd",
+    "lot_calculator": "b3_mini_contracts",
+    "digits": 3,
+    "point": 0.001,
+    "tick_size": 0.001,
+    "tick_value": 10.0,
+    "contract_size": 10000.0,
+    "pip_override": 0.001,
+    "min_lot": 1.0,
+    "lot_step": 1.0,
+    "risk_amount": 300.0
+  },
+  "killzones": [
+    {"name": "B3 Dolar", "start": "12:00", "end": "21:05"}
+  ],
+  "cot": {"macro_bias": "BULLISH"},
+  "cvd": [
+    {"time":1000000,"value":12.0},{"time":1000900,"value":27.0},
+    {"time":1001800,"value":45.0},{"time":1002700,"value":57.0},
+    {"time":1003600,"value":72.0},{"time":1004500,"value":90.0},
+    {"time":1005400,"value":102.0},{"time":1006300,"value":117.0},
+    {"time":1007200,"value":135.0},{"time":1008100,"value":147.0},
+    {"time":1009000,"value":162.0},{"time":1009900,"value":180.0},
+    {"time":1010800,"value":192.0},{"time":1011700,"value":207.0},
+    {"time":1012600,"value":225.0},{"time":1013500,"value":237.0},
+    {"time":1014400,"value":252.0},{"time":1015300,"value":270.0},
+    {"time":1016200,"value":282.0},{"time":1017100,"value":297.0}
+  ],
+  "candle_params": {"base_price": 5.820, "count": 20, "bias": "bullish", "spread": 0.008, "seed_increment": 0.004, "digits": 3},
+  "patterns": {
+    "fvgs": [
+      {"type": "BULLISH_FVG", "top": 5.856, "bottom": 5.844, "start_time": 1002700}
+    ],
+    "order_blocks": [
+      {"type": "BULLISH_OB", "top": 5.852, "bottom": 5.838, "start_time": 1001800}
+    ],
+    "sweeps": [
+      {"type": "PDL_SWEEP", "time": 1003600}
+    ]
+  },
+  "current_price": 5.85,
+  "cfg": {"sl_distance": 0.03, "tp_ratio_r": 1.5, "min_rr": 2.0, "setup_ttl_minutes": 45},
+  "expected": {
+    "score_min": 82.0,
+    "score_equals": "b3_win_mini",
+    "verdict": "ALTA_PROBABILIDAD",
+    "killzone_active": true,
+    "killzone_name": "B3 Dolar",
+    "approved": false,
+    "reject_contains": "R:R",
+    "invalidation": 5.838,
+    "entry": 5.844,
+    "unit_label": "puntos",
+    "sl_units": 30.0,
+    "sl_units_without_override": 3.0,
+    "lots": 1.0
+  }
+}

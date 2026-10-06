@@ -1,0 +1,64 @@
+{
+  "name": "B3 minicontrato de indice (WIN): 130.000 puntos, 0 decimales",
+  "description": "Clone estructural de killzone_edge_1min con la unidad de la B3. La confluencia (FVG + OB + sweep + CVD alcista) es identica; lo unico que cambia son la escala del precio, los digitos y la sesion. Si el score difiere del forex, el nucleo tiene un supuesto de forex metido. Ventana 12:00-21:25 UTC = 09:00-18:25 America/Sao_Paulo de sessions.b3_mini_index (config/trading_hours.json).",
+  "direction": "BUY",
+  "now_utc": "2026-09-08T14:00:00Z",
+  "symbol": "WIN",
+  "timeframe": "M15",
+  "market": {
+    "market_type": "B3_FUTURES",
+    "session_id": "b3_mini_index",
+    "lot_calculator": "b3_mini_contracts",
+    "digits": 0,
+    "point": 5.0,
+    "tick_size": 5.0,
+    "tick_value": 1.0,
+    "contract_size": 1.0,
+    "min_lot": 1.0,
+    "lot_step": 1.0,
+    "risk_amount": 100.0
+  },
+  "killzones": [
+    {"name": "B3 Indice", "start": "12:00", "end": "21:25"}
+  ],
+  "cot": {"macro_bias": "BULLISH"},
+  "cvd": [
+    {"time":1000000,"value":12.0},{"time":1000900,"value":27.0},
+    {"time":1001800,"value":45.0},{"time":1002700,"value":57.0},
+    {"time":1003600,"value":72.0},{"time":1004500,"value":90.0},
+    {"time":1005400,"value":102.0},{"time":1006300,"value":117.0},
+    {"time":1007200,"value":135.0},{"time":1008100,"value":147.0},
+    {"time":1009000,"value":162.0},{"time":1009900,"value":180.0},
+    {"time":1010800,"value":192.0},{"time":1011700,"value":207.0},
+    {"time":1012600,"value":225.0},{"time":1013500,"value":237.0},
+    {"time":1014400,"value":252.0},{"time":1015300,"value":270.0},
+    {"time":1016200,"value":282.0},{"time":1017100,"value":297.0}
+  ],
+  "candle_params": {"base_price": 127850, "count": 20, "bias": "bullish", "spread": 250, "seed_increment": 120, "digits": 0},
+  "patterns": {
+    "fvgs": [
+      {"type": "BULLISH_FVG", "top": 130080, "bottom": 129880, "start_time": 1002700}
+    ],
+    "order_blocks": [
+      {"type": "BULLISH_OB", "top": 129960, "bottom": 129820, "start_time": 1001800}
+    ],
+    "sweeps": [
+      {"type": "PDL_SWEEP", "time": 1003600}
+    ]
+  },
+  "current_price": 130000,
+  "cfg": {"sl_distance": 500, "tp_ratio_r": 2.0, "min_rr": 2.0, "setup_ttl_minutes": 45},
+  "expected": {
+    "score_min": 82.0,
+    "score_equals": "killzone_edge_1min",
+    "verdict": "ALTA_PROBABILIDAD",
+    "killzone_active": true,
+    "killzone_name": "B3 Indice",
+    "approved": true,
+    "invalidation": 129820,
+    "entry": 129880,
+    "unit_label": "puntos",
+    "sl_units": 100.0,
+    "lots": 1.0
+  }
+}

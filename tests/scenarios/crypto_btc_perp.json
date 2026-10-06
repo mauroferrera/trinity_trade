@@ -1,0 +1,66 @@
+{
+  "name": "Cripto perpetuo BTCUSDT: 65.000 con 1 decimal y nocional en USDT",
+  "description": "Misma confluencia que b3_win_mini en un perpetuo. Tres diferencias con los otros dos: el macro entra como fear_and_greed (macro_bias) y NO como informe COT, asi que no hay cot_index_26w que reportar y el detalle tiene que decirlo; el tamano no son lotes sino unidades de BTC con nocional en USDT; y la ventana es la de cripto 24x7 (13:00-20:00 UTC), no una sesion de bolsa. Ventana: sessions.crypto_24x7 de config/trading_hours.json.",
+  "direction": "BUY",
+  "now_utc": "2026-09-08T15:00:00Z",
+  "symbol": "BTCUSDT",
+  "timeframe": "M15",
+  "market": {
+    "market_type": "CRYPTO_PERPETUAL",
+    "session_id": "crypto_24x7",
+    "lot_calculator": "crypto_notional_usdt",
+    "digits": 1,
+    "point": 0.1,
+    "tick_size": 0.1,
+    "tick_value": 0.1,
+    "contract_size": 1.0,
+    "min_lot": 0.001,
+    "lot_step": 0.001,
+    "risk_amount": 100.0
+  },
+  "killzones": [
+    {"name": "US cripto", "start": "13:00", "end": "20:00"}
+  ],
+  "cot": {"macro_bias": "BULLISH"},
+  "cvd": [
+    {"time":1000000,"value":12.0},{"time":1000900,"value":27.0},
+    {"time":1001800,"value":45.0},{"time":1002700,"value":57.0},
+    {"time":1003600,"value":72.0},{"time":1004500,"value":90.0},
+    {"time":1005400,"value":102.0},{"time":1006300,"value":117.0},
+    {"time":1007200,"value":135.0},{"time":1008100,"value":147.0},
+    {"time":1009000,"value":162.0},{"time":1009900,"value":180.0},
+    {"time":1010800,"value":192.0},{"time":1011700,"value":207.0},
+    {"time":1012600,"value":225.0},{"time":1013500,"value":237.0},
+    {"time":1014400,"value":252.0},{"time":1015300,"value":270.0},
+    {"time":1016200,"value":282.0},{"time":1017100,"value":297.0}
+  ],
+  "candle_params": {"base_price": 64500, "count": 20, "bias": "bullish", "spread": 60, "seed_increment": 25, "digits": 1},
+  "patterns": {
+    "fvgs": [
+      {"type": "BULLISH_FVG", "top": 65080, "bottom": 64880, "start_time": 1002700}
+    ],
+    "order_blocks": [
+      {"type": "BULLISH_OB", "top": 65040, "bottom": 64820, "start_time": 1001800}
+    ],
+    "sweeps": [
+      {"type": "PDL_SWEEP", "time": 1003600}
+    ]
+  },
+  "current_price": 65000,
+  "cfg": {"sl_distance": 400, "tp_ratio_r": 2.0, "min_rr": 2.0, "setup_ttl_minutes": 45},
+  "expected": {
+    "score_min": 82.0,
+    "score_equals": "b3_win_mini",
+    "verdict": "ALTA_PROBABILIDAD",
+    "killzone_active": true,
+    "killzone_name": "US cripto",
+    "approved": true,
+    "invalidation": 64820,
+    "entry": 64880,
+    "cot_index_reported": false,
+    "unit_label": "puntos",
+    "sl_units": 4000.0,
+    "lots": 0.25,
+    "notional_usdt_at_market": 16250.0
+  }
+}
