@@ -37,8 +37,8 @@ class TestPathsAreAbsolute:
         assert paths.PROJECT_DIR == str(Path(__file__).resolve().parent.parent.parent)
 
     @pytest.mark.parametrize("name", [
-        "DB_PATH", "STRATEGY_PATH", "DATA_DIR", "DXY_CACHE_FILE",
-        "TEST_FIXTURES_DIR", "RESEARCH_DIR", "RESEARCH_RESULTS_DIR", "BACKUPS_DIR",
+        "DB_PATH", "STRATEGY_PATH", "DXY_CACHE_FILE",
+        "TEST_FIXTURES_DIR", "RESEARCH_DIR", "BACKUPS_DIR",
     ])
     def test_toda_ruta_es_absoluta(self, name):
         value = getattr(paths, name)
@@ -83,6 +83,99 @@ class TestPathsAreAbsolute:
 
     def test_config_dir_existe(self):
         assert Path(paths.CONFIG_DIR).is_dir()
+
+
+class TestRutasExternas:
+    """Las rutas de DATOS no viven en el repo, y ese es el punto.
+
+    Al revés que el bloque de arriba, aquí la aserción es `startswith` NO vale:
+    DATA_DIR tenía que estar dentro de la raíz hasta que empezó a pesar. El
+    contrato inválido es ahora el que hay que defender.
+    """
+
+    @pytest.mark.parametrize("name", [
+        "DATA_ROOT", "DATA_DIR", "DATABENTO_RAW_DIR",
+        "RESEARCH_DATA_DIR", "RESEARCH_RESULTS_DIR",
+    ])
+    def test_datos_fuera_del_repo(self, name):
+        value = getattr(paths, name)
+        assert os.path.isabs(value), f"{name} es relativa: dependería del CWD"
+        assert not paths._is_within(value, paths.PROJECT_DIR), (
+            f"{name} sigue dentro del repo ({value}): OneDrive lo sincronizaría "
+            "y git podría versionarlo"
+        )
+
+    def test_la_raiz_del_default_no_es_onedrive(self):
+        """El default elegido tiene que pasar su propia regla.
+
+        Si un día Windows redirige `Desktop` hacia OneDrive (es lo normal en un
+        equipo corporativo), el default incumpliría la regla que motivó este
+        módulo sin que nada lo gritara. Este test lo grita.
+        """
+        assert paths.data_root_guard_error(paths.DATA_ROOT) is None, (
+            paths.data_root_guard_error(paths.DATA_ROOT)
+        )
+
+    def test_research_dir_sigue_dentro_porque_es_codigo(self):
+        """RESEARCH_DIR es código (RESEARCH_CLI_REL se invoca con cwd=PROJECT_DIR)
+        y por eso NO se mueve; sus resultados sí. Si este falla, alguien ha
+        arrastrado el código a la raíz externa y el CLI relativo se rompe."""
+        assert paths._is_within(paths.RESEARCH_DIR, paths.PROJECT_DIR)
+        assert paths.RESEARCH_CLI_REL == os.path.join("research", "run_research.py")
+
+
+class TestGuardianDeRaizDeDatos:
+
+    def test_una_ruta_valida_no_dispara(self, tmp_path):
+        assert paths.data_root_guard_error(str(tmp_path)) is None
+
+    def test_relativa_dispara(self):
+        motivo = paths.data_root_guard_error("data" + os.sep + "cinta")
+        assert motivo is not None
+        assert "CWD" in motivo
+
+    def test_vacia_dispara(self):
+        assert paths.data_root_guard_error("") is not None
+        assert paths.data_root_guard_error("   ") is not None
+        assert paths.data_root_guard_error(None) is not None
+
+    def test_dentro_del_repo_dispara(self):
+        motivo = paths.data_root_guard_error(
+            os.path.join(paths.PROJECT_DIR, "parquet"))
+        assert motivo is not None
+        assert "dentro del repo" in motivo
+
+    def test_dentro_de_onedrive_dispara(self):
+        # Hermana del repo, dentro de OneDrive pero NO dentro del repo: solo la
+        # regla de OneDrive la puede cazar. Si se quitara esa comprobación, este
+        # test y la consecuencia de sincronizar gigabytes seguirían ahí.
+        otro = os.path.join(paths.PROJECT_DIR, "..", "otra_carpeta")
+        motivo = paths.data_root_guard_error(otro)
+        assert motivo is not None
+        assert "OneDrive" in motivo
+
+    def test_dentro_de_ref_dispara(self):
+        motivo = paths.data_root_guard_error(
+            os.path.join(paths.REFERENCE_DIR, "cintas"))
+        assert motivo is not None
+        assert "solo lectura" in motivo
+
+    @pytest.mark.parametrize("bad", [
+        "", "   ", None, "cinta", os.path.join("C:\\", "Users", "OneDrive", "x"),
+    ])
+    def test_todo_lo_malo_dispara(self, bad):
+        assert paths.data_root_guard_error(bad) is not None
+
+    def test_importar_no_crea_directorios(self, tmp_path):
+        """paths.py debe declarar, no crear.
+
+        `ensure_dir` es la ÚNICA puerta de escritura del módulo. Sin esta
+        aserción, un `os.makedirs` al importar crearía `Desktop\trinity_data` en
+        cualquier ordenador que importara el módulo, con solo abrir la app.
+        """
+        source = Path(paths.__file__).read_text(encoding="utf-8")
+        assert source.count("os.makedirs(") == 1, (
+            "paths.py solo debe crear directorios dentro de ensure_dir")
 
 
 class TestStrategyPathIsOverridable:
