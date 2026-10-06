@@ -581,3 +581,533 @@ depende de `scan_interval_sec` de `strategy.yaml`.
 4 con otro nombre. `TTLCache` marca el respaldo con `stale=True` y `MacroReading` lleva
 `asof_ts`; es la misma idea de "no me digas que esto es actual si no lo es", resuelta en la
 capa de I/O en vez de en la de contexto.
+
+### D-029 - Los puertos del agente son `Protocol` más `AgentDeps`, e `import agent` no tiene efectos secundarios
+
+**Contexto:** cada handler de `REF/agent.py` hacía `import app` dentro de la función para llamar
+al monolito. Tres consecuencias con nombre: una herramienta que solo necesita la base de datos
+(`trade_query`, `journal_append`) no se podía probar sin levantar el API entero; la capa de
+explicabilidad quedó soldada a MT5-Forex, así que añadir B3 exigía tocar el agente; y cualquier
+capa que importara el agente entraba por la puerta de MT5, que es el mismo problema que D-017
+ya había cerrado para los adaptadores.
+
+**Decisión:** `agent/ports.py` declara `MarketPort`, `StorePort`, `NewsPort` y `ExportPort` como
+`Protocol`, más `AnalysisAnchors` (el estado que se comparte entre llamadas de una conversación) y
+`AgentDeps`, el objeto que los junta y que lleva el reloj y el `sleep` inyectables.
+`database/store.py` satisface `StorePort` tal cual, sin adaptadores ni herencia: la comparación
+es estructural, y que un doble de test cumpla el contrato se verifica con un test, no con una
+clase base que obligaría a `store` a heredar de algo.
+
+**Alternativa descartada:** una `BasePort` común. Habría que hacer que `store` heredase de ella
+para poder afirmar que cumple el contrato, y un módulo de funciones sueltas no hereda bien.
+Además `runtime_checkable` en Python 3.12 mira NOMBRES, no significados (límite ya documentado
+en D-021): el contrato de verdad es la lista explícita de cables, no un `isinstance`.
+
+### D-030 - Tres estados de herramienta: `ok`, `failed` y `unavailable`
+
+**Contexto:** REF tenía `ok` / `failed` / `offline`, y `offline` significaba dos cosas distintas
+según quién mirase. Para `price` era "el símbolo no está en Market Watch"; para `set_chart_alert`
+era "MT5 no respondió". Con un solo nombre, el modelo recibía el mismo rótulo para un problema de
+configuración y para una caída del bróker, y en la traza no había forma de distinguirlos.
+
+**Decisión:** `ok` (hay dato), `failed` (el puerto existe y reventó al producir la respuesta) y
+`unavailable` (el puerto NO está cableado, o el proveedor está apagado: no hay nada que reintentar,
+hay algo que terminar de construir). El motivo viaja siempre en `error`, para que el log diga
+"falta MarketPort" y no "error desconocido".
+
+**Alternativa descartada:** mantener `offline` y matizar el texto del error. El estado es lo que
+el modelo lee para decidir si reintenta; el matiz en el texto es justo lo que se pierde.
+
+### D-031 - El agente transporta el score; no lo calcula
+
+**Contexto:** la regla 19 de `AGENT_GUIDELINES.md` dice que el agente explica y no decide. Con las
+herramientas pegadas al monolito, "decidir" se colaba por la puerta de atrás: una herramienta que
+devuelve un número calculándolo en el handler es una decisión sin auditar.
+
+**Decisión:** `agent/` no calcula entradas, SL, TP ni tamaños. El score lo calcula
+`core/risk_engine.py`, la política la redacta `prompt_templates.risk_policy_lines`, y el bucle solo
+transporta. La comprobación es de lectura: si el bucle puede "ajustar" un número, ese número deja
+de ser auditable.
+
+### D-032 - `completion` es un seam: LiteLLM se importa dentro de la llamada
+
+**Contexto:** importar `litellm` arriba del todo el módulo carga el cliente de LLM al hacer
+`import agent`, que es exactamente el efecto secundario que D-029 cierra. Y el bucle con fallback,
+rotación de claves y backoff es la parte con más caminos de error de todo el agente: probarlo
+contra un proveedor real sería probar la red, no la lógica.
+
+**Decisión:** el puente llama a un `completion` inyectado con la misma firma que
+`litellm.acompletion`; el default se resuelve en la primera llamada, con `from litellm import
+acompletion` DENTRO de la función. Hay un test que parsea el AST del módulo y falla si ese import
+sube al nivel superior. Toda la suite del agente corre sin red y sin credenciales.
+
+### D-033 - `done` es un invariante del stream, y no hay failover después del primer `delta`
+
+**Contexto:** REF emitía `done` en cinco ramas del bucle, así que añadir un camino nuevo y
+olvidarlo dejaba al cliente con un stream abierto para siempre. Y REF encadenaba la respuesta del
+proveedor siguiente cuando el stream se cortaba DESPUÉS de haber emitido texto: el usuario veía
+media respuesta del modelo A y luego la del modelo B, una encima de otra.
+
+**Decisión:** dos reglas, y son la misma idea (el stream es un contrato con el cliente):
+
+- El generador interno NUNCA emite `done`; lo emite el envoltorio `stream()`, una vez, sea cual
+  sea el camino. Si el cliente desconecta (`GeneratorExit`) no se emite, porque no hay nadie que
+  lo lea: un `yield` dentro de un `finally` revienta con "async generator ignored GeneratorExit".
+- La vuelta a otro proveedor solo existe ANTES del primer `delta`. Después se dice que se cortó y
+  se termina. Media respuesta es mejor que dos respuestas superpuestas.
+
+**Alternativa descartada:** `finally: yield sse(done)`. Es la forma idiomática y aquí es
+incorrecta: en una desconexión lanza. La excepción se propaga y el cierre no se emite, que es lo
+correcto.
+
+### D-034 - A la traza el digest; al modelo, el payload completo
+
+**Contexto:** REF guardaba en `messages(role='tool')` el JSON entero del resultado, que en
+`chart_snapshot` son cientos de KB por llamada, y no guardaba los argumentos de la llamada. Una
+traza sin argumentos no permite reproducir la consulta que la generó.
+
+**Decisión:** dos representaciones, dos consumidores. A la base va el sobre de
+`prompt_templates.tool_digest` (tool, args, round, status, elapsed_ms, bytes y recorte
+declarado); al modelo, en el mensaje `role='tool'` de la ronda, el resultado completo. Recortar
+lo que lee el modelo es inventarse un dato, y guardar el payload entero en cada llamada hace la
+tabla `messages` ilegible.
+
+**Lo que NO cambia en esta fase:** `role='tool'` se sigue escribiendo, porque es lo que la tabla
+admite y lo que REF hacía, y `store.get_messages()` la sigue filtrando. El contrato de
+`get_messages()` no se toca aquí: `tool_call_id` puede quedar huérfano en la traza y el
+emparejamiento lo hace el historial de la ronda, no la base.
+
+### D-035 - La degradación de un modelo local se DICE, no se nota
+
+**Contexto:** el function-calling de los modelos locales no es fiable: uno pequeño a veces emite el
+tool call como texto plano en lugar de en `tool_calls`. Si eso se emite como `delta`, el usuario ve
+un JSON crudo en medio de su respuesta.
+
+**Decisión:** dos comportamientos distintos según cuándo se sepa lo que es el texto. Si el primer
+modelo al que se le pregunta es local y la petición es compleja, degrada a "ruta simple" (los datos
+en vivo van inyectados en el prompt y el modelo redacta sin llamar a nada) y **se avisa con un
+`status`**, porque el usuario pidió herramientas y va a recibir una respuesta redactada sin ellas.
+Si aun así llega un texto que es exactamente un JSON con un nombre permitido, se interpreta como
+tool call, se ejecuta y **se vacía el búfer**: en ese momento ya se sabe que el texto no era
+respuesta.
+### D-036 - `Runtime` en `app.state`, y `create_app(runtime)` para los tests
+
+**Contexto:** REF tenia el estado del proceso en variables de modulo (`_engine`, `manager`, `DB_STATE`,
+`_main_loop`). Importar `app` encendia un hilo (`_cot_background_sync`), dos apps en el mismo proceso
+compartian estado, y no habia forma de saber que estaba cableado: `import app` funcionaba igual con la
+base caida, sin MT5 y sin feeds, y el primer sintoma era un 500 en una ruta concreta.
+
+**Decision:** `Runtime` (unico contenedor) creado en `create_app()` y guardado en `app.state.runtime`;
+los endpoints lo leen con `deps.runtime(request)`. Que el contenedor sea un ARGUMENTO de `create_app` es
+lo que permite `create_app(Runtime(store=Fake(), market=Fake()))` en un test sin monkeypatch global.
+`startup()` engancha el loop de asyncio al bus de WebSockets e inicializa la base; NO abre MT5, no
+descarga el COT y no arranca ningun feed. Un proceso que enciende todo al arrancar esconde el fallo de
+arranque detras de un 502 en la primera peticion.
+
+`Runtime.symbols` cae al `market` si no se pasa: es el proveedor de simbolos, no una pieza mas que haya
+que acordarse de cablear.
+
+### D-037 - El mapeo de errores es por clase que SIGNIFICA, no por `RuntimeError`
+
+**Contexto:** REF registro handlers para `RuntimeError` y `TimeoutError`, ambos a 503. `RuntimeError` es
+la clase base de casi todo, asi que un `KeyError` disfrazado de `RuntimeError` salia como "no hay
+conexion con MetaTrader 5".
+
+**Decision:** un handler por clase con significado: `SymbolNotFound` 404, `AdapterError` 503,
+`IngestorError` 502, `AgentPortError` 503, `ConfigUnavailable` 503, `ValueError` de parametros 400. Un
+bug de codigo (`TypeError`, `KeyError`, `AttributeError`) NO tiene handler: sube a 500 con traceback en
+el log. `ValueError` es el unico ambiguo y se acepta a proposito: es lo que lanzan `core.market_view` y
+`core.lot_calculator` con un parametro fuera de rango.
+
+El cuerpo siempre lleva `error` (el JS heredado lo busca por ese nombre).
+
+### D-038 - El token se lee por peticion y con `compare_digest`
+
+REF leia `API_TOKEN` en cada llamada (bien) pero los origenes CORS al importar (mal: cambiarlos
+exigia reiniciar y el sintoma era "cambie el origen y el navegador sigue dando CORS"). Aqui los dos se
+leen por peticion, y el token se compara con `secrets.compare_digest` en vez de `==`: la comparacion de
+cadenas de Python sale en cuanto encuentra una diferencia y filtra el token prefijo a prefijo.
+
+Sin `API_TOKEN` no se exige nada (modo desarrollo local). Con token, la ausencia de cabecera y el valor
+equivocado son el MISMO 401, porque esa diferencia solo importa al atacante. En WebSockets el token va
+en la query o en `Sec-WebSocket-Protocol`, y se comprueba ANTES del `accept()`: despues el cierre
+correcto es 1008, que el cliente distingue de un corte de red.
+
+### D-039 - El contrato con el frontend se escribe, no se supone
+
+`static/main.js` (195 KB, copiado de REF sin reescribir) llama 47 rutas; los routers sirven 43. La
+diferencia esta escrita en el docstring de `api/routes/__init__.py`, con lo que falta y que necesita
+cada ruta, porque un endpoint que falta se descubre cuando el dashboard deja de pintar un panel.
+
+Los alias que si se anaden son de UNA LINEA y no dependen de nada (`/api/analysis/chartism/{symbol}`,
+`/api/analysis/chart-assistant/{symbol}`, `/api/candle/last/{symbol}`, `/api/db/tables/{table}`): el
+ultimo no era un alias sino un BUG, `/api/db/tables/{table}` es lo que llama el JS y el router solo
+tenia `/api/db/{table}`, asi que el inspector de la pestana de datos devolvia 404.
+
+`store.get_config_summary()` leia claves planas de un YAML ANIDADO (`cfg["min_score"]` en vez de
+`score.min_score`) y devolvia `min_score: None`, `risk_weights: {}` y `killzones: []` con la config real
+puesta: la UI pintaba "sin reglas" con el sistema entero configurado. Ahora lee por seccion con fallback
+plano (`RESUMEN_CLAVES`), porque una config guardada por la UI antigua sigue siendo plana.
+
+### D-040 - Ningun test abre `database/trading.db`, ni para leer
+
+El canario de `tests/conftest.py` mide el hash del fichero real y salta si cambia. Ha saltado DOS veces
+esta fase: abrir una base en modo WAL hace que hasta una lectura termine en checkpoint al cerrar, y un
+test que escribio a traves del modulo `store` sin redirigir `DB_PATH` dejo 7 filas en la bitacora real.
+
+Los tests que necesitan el store de verdad usan el fixture `db`, que redirige `DB_PATH`, `PROJECT_DIR` y
+el seam de config (este ultimo, porque el default es el modulo `strategy`, que aun no existe, y sin
+cambiarlo cada test acabaria probando el camino del error de configuracion). Los que solo necesitan leer
+usan `FakeStore`: no hay reason para tocar el fichero mas valioso del proyecto para comprobar que un
+endpoint devuelve 200.
+
+### D-041 - El orden de declaracion de las rutas es parte del contrato
+
+`/api/journal/{jid}` con `jid: int` se traga `/api/journal/overlay` y devuelve 422 ("no se puede
+convertir 'overlay' en entero") en vez de 404: Starlette empareja en ORDEN DE REGISTRO. Por eso
+`overlay` se declara antes que la parametrizada, con un test que falla si alguien lo mueve.
+
+La alternativa (tipar el id como `str` y validar dentro) parece mas robusta y es peor: el 422 de
+Pydantic sobre el path deja de distinguir "esta ruta no existe" de "mandaste un id malo", y el
+frontend heredado trata los dos como error de la peticiion.
+
+El inventario de lo que falta esta en el docstring de `api/routes/__init__.py` y lo hace
+CUMPLIR un test (`TestContratoConElFrontend`) en las dos direcciones: si el JS pide una ruta que no
+esta inventariada, falla; si la tabla declara como pendiente algo ya servido, tambien. Un inventario
+que se queda obsoleto es peor que no tener inventario, porque parece una lista de trabajo.
+
+Cerrado en esta sesion: `/api/journal/overlay`, `/api/chart/drawings` (GET/PUT/DELETE),
+`/api/chart/alerts` (GET) y `/api/chart/alerts/{aid}` (DELETE), `POST /api/trades/sync`,
+`POST /api/agent/roles`, `GET`/`POST /api/agent/config`, `GET /api/analysis/cvd/{symbol}`,
+`GET /api/analysis/smr/{symbol}`, `GET /api/volume-profile/{symbol}`, `GET /api/cot/report` y
+`POST /api/cot/refresh`. Quedan 19, y las que dependen de `strategy`/`watcher` o de un puerto de
+ejecucion esperan a esos modulos.
+
+### D-042 - El COT se LEE de la tabla y solo se DESCARGA en el refresh
+
+`GET /api/cot/report` construye el sesgo con `store.list_cot_reports()` + `cot_service.build_report`
+(puro), sin tocar la red. REF hacia lo mismo por su `sync()`/cache, pero aqui la razon es dura: un
+panel que hace una peticion a la CFTC en cada refresco de pagina es un rate-limit esperando a
+ocurrir. `POST /api/cot/refresh` es el unico que sale, y por eso es el unico con token.
+
+El refresh persiste lo descargado y escribe `cot_index_26w`/`macro_bias` SOLO en la fila mas
+reciente. Escribirlo en todas exigiria un `build_report` por fila con su propia ventana movil, y el
+resultado seria un numero que ninguna recomputacion reproduce: mejor la tabla con lo crudo que la
+tabla con cifras inventadas por fila.
+
+### D-043 - El Volume Profile reparte el volumen real de las velas, sin inventar la forma
+
+`core.market_view.volume_profile()` reparte el `volume` de cada vela entre los bins que su rango
+[low, high] solapa, a prorrata del ancho del solape. Es la unica vista del modulo que no simula
+ticks, y la distincion es el punto: un POC con forma triangular (lo que haria `_simulate_ticks`)
+se parece a un POC medido en el dibujo y no en el numero, que es lo que el usuario mira.
+
+DENTRO de la vela el reparto es uniforme, y es una limitacion DECLARADA: OHLCV no dice en que
+precio se transacto dentro del rango. Lo que no se inventa es el total (hay test: la suma de los
+bins es la suma del volumen de las velas, con la tolerancia del redondeo a dos decimales de cada
+bin), y el valor (VAH/VAL) se abre desde el POC tomando el vecino mas gordo, no simetricamente.
+
+REF tenia dos fuentes (ticks de MT5 y fallback a barras). Aqui solo hay una, y el `source` lo dice
+("bars"): cuando llegue el proveedor de ticks se anade el camino y se cambia el `source`, sin tocar
+el shape.
+
+### D-044 - El gate del setup es de `core/`, no del router
+
+En REF el panel de setup y el boton de entrada montaban la aritmetica del plan cada uno por su
+cuenta (zona de entrada, niveles, veredicto). Para el mismo setup llegaban numeros distintos
+dependiendo de donde mirases, y ese tipo de discrepancia no aparece en un test: aparece en
+pantalla, comparando dos pestanas.
+
+Aqui la aritmetica vive en `core/setup_gate.py` (puro, sin `adapters` ni `api`) y las dos rutas
+consumen el mismo veredicto. `api/routes/setup.py` compone la respuesta y el overlay de ECharts;
+no calcula.
+
+### D-045 - `approved` es el veredicto del gate, NO permiso de ejecucion
+
+El score, la killzone, la zona y el R:R deciden si un setup es OPERABLE. No deciden si se manda la
+orden. Confundir las dos cosas convierte un gate en un permiso y abre la puerta a que un 80 en el
+panel se lea como "ejecutado".
+
+Por eso `news_blackout` se PUBLICA en la respuesta pero no FILTRA: la puerta que bloquea de verdad
+es la que conoce la hora real de la orden, que es la capa de ejecucion.
+
+### D-046 - `synthetic=1` responde 503, no velas falsas
+
+Sin proveedor de ticks (el hito 6E) no hay `MarketSimulator` que cablear. Un 200 con velas reales
+bajo un flag de test es peor que un error: el que pide el feed de prueba recibe el mercado real y no
+lo sabe. Se responde 503 y se dice por que.
+
+### D-047 - Los resolvers de config aceptan las DOS formas que hay en el repo
+
+La config PLANA (lo que devuelve `store.get_trading_config()` y consume la UI y el agente) tiene
+`risk_weights` y `killzones` como JSON strings. La config ANIDADA (la del `strategy.yaml`) tiene
+`score.weights` como estructura. Las dos existen y ambas se usan. Aceptar una sola deja el otro
+camino con los defaults en silencio, que es la forma mas cara de un bug: el score sale, sale bien
+formateado, y no es el que el operador configuro.
+
+### D-048 - Las fabricas de test llevan la unidad del mercado, no la del forex
+
+`make_candles`/`make_trades` redondeaban a 5 decimales y `make_snapshot_from_scenario` tenia
+`current_price=1.1045` como default. Con el forex eso es correcto. Con BTCUSDT es una trampa:
+`round(x, 5)` deja decimales que ningun feed emite, y un scenario sin precio se colaba valuing en
+1.1045 contra un SL de 400 puntos, que es un plan sin sentido en lugar de un fallo visible.
+
+Por eso `digits` es parametro, `tick_size` engancha la serie a la rejilla de cotizacion (el WIN cotiza
+de 5 en 5: un `round(x, 0)` produce 129998, un precio que no existe) y `current_price` es
+OBLIGATORIO: si no esta, `ValueError`.
+
+### D-049 - Un scenario se valida contra `config/`, no contra el criterio del test
+
+`lot_calculator`, `market_type` y `session_id` tienen que coincidir con `asset_sources_map.yaml`, y
+la ventana UTC de la killzone con `sessions` de `trading_hours.json` (corrida al UTC del exchange,
+que para la B3 son las 12:00-21:25 UTC de las 09:00-18:25 de Sao Paulo). Si un test fija la
+ventana, la ventana pasa a estar en el test y `trading_hours.json` se convierte en decoracion: un
+calendario que nadie consulta y que por eso no se mantiene.
+
+### D-050 - Un `pip_override` descarta la convencion forex
+
+La regla de la unidad es `point * 10 si digits >= 3`, y sale de como cotizan los pares de divisas.
+Un `pip_override` existe justamente para los simbolos que NO son pares de divisas, asi que cuando
+esta puesto la etiqueta "pips" es falsa aunque el simbolo cotice a 3 decimales: el minicontrato de
+dolar de la B3 reportaba un SL de 30 puntos como "3,0 pips". Mismo error que el del oro (multiplica
+por diez), corregido en el otro sentido.
+### D-051 - Un doble de MT5 tiene que devolver el TIPO que devuelve el paquete
+
+`copy_rates_from_pos`, `copy_rates_range` y `copy_ticks_range` devuelven un array **numpy**, no una
+lista. El adaptador hacia `rows or []` y `if not rows`, que con un array de mas de un elemento lanza
+`ValueError: The truth value of an array with more than one element is ambiguous`: TODA lectura de
+velas de EURUSD era imposible, y `/api/risk/setup` respondia 400. El doble devolvia listas, donde
+preguntar por la verdad es inocuo, asi que 1220 tests de verde certificaban un codigo que en el
+bróker real no funciona nunca.
+
+Un doble mas permisivo que la realidad es peor que no tener doble, porque da la-certificacion-de-lo-que-no.
+Por eso `FakeMT5.set_rates(..., as_numpy=True)` existe, y porque el doble de `symbols_get` ahora
+**respeta el grupo**: `symbols_get(group="\\*\\*\\*")` devuelve vacio en el bróker real (los escapes
+con barra invertida son sintaxis de MQL5, no de la API de Python) y el doble lo ignoraba. Con el
+grupo respetado, `/api/symbols` paso de `[]` a los 23 simbolos visibles que publica el bróker.
+
+**Consecuencia:** `filas_o_vacias()` en `adapters/base_adapter.py` es la unica forma de comprobar
+"no hay filas". Se compara contra `None` y no se convierte a lista, porque `normalize_candle()`
+indexa posicionalmente y un array se indexa igual que una tupla.
+
+### D-052 - Un panel de estado no puede mentir en la direccion de "todo va bien"
+
+Dos Falls de verdad, los dos en `/api/health`:
+
+1. La sesion de MT5 expone `is_open` como `@property`, y el runtime la llamaba como metodo:
+   `TypeError` y un **500 en la primera pantalla**, solo con el cableado real, porque el doble de
+   mercado lleva `session = None` y la rama no se ejecutaba nunca.
+2. La sesion es **perezosa**: `is_open` solo es `True` despues de que una lectura abrio la terminal.
+   Una app recien arrancada publicaba `sin_terminal` con el broker conectado y el resto de rutas
+   funcionando. El operador veia rojo y no tocaba nada. Ahora `_terminal_alcanzable()` PREGUNTA
+   (hace el trabajo minimo de conexion) en vez de suponer. Una terminal cerrada sigue siendo un
+   estado legitimo, no una averia: por eso el `try` se traga el fallo.
+
+Y `broker_time.ea_clock` leia `.get("estado")` de un payload que no tiene esa clave y de un
+`read_ea_clock()` que puede ser `None`: el campo era **siempre `null`** (o tumbaba el bloque entero
+con un `AttributeError`), y un EA parado tres dias pasaba por verificado. Ahora sale `state()["ea_clock"]`
+entero, con `age_sec` y `stale`.
+
+**Consecuencia:** un test de health con `FakeMarket()` nunca puede certificar el estado del terminal.
+Los dobles de sesion tienen la forma de la real (`_SesionConProperty`, `_SesionConMetodo`,
+`_SesionQueExplota`, `_SesionPerezosa`), y hay un test por cada forma.
+
+### D-053 - La config tiene dos formas y las dos existen de verdad
+
+`get_trading_config()` devuelve lo que produce `build_flat`: los topes en la raiz
+(`{"risk_pct": 0.5, ...}`). `daily_risk_state()` leia `cfg["risk"]`, asi que los cinco salian en
+`null` y el panel de riesgo aparentaba no tener topes puestos mientras el gate de entrada si los
+aplicaba. El test existente cubria la forma ANIDADA (la del YAML) y por eso la plana se escapaba
+entera. Es el mismo problema que arrastra `api/services/macro_news.py`.
+
+**Consecuencia:** se delega en `core.strategy._primer_valor()` en vez de escribir una tercera
+variante del resolver, y con las dos rutas presentes **gana la anidada**, que es la fuente declarada.
+Si esto se repite, el resolver pasa de `core/strategy.py` a un modulo de config compartido.
+
+### D-054 - La puerta de ejecucion es un SERVICIO, no un handler
+
+Cada puerta (lista blanca, riesgo del dia, noticias, gates, auditoria) vive en
+`api/services/execution.py`, no en las rutas. La razon es concreta: el watcher tiene que ejecutar
+por EXACTAMENTE el mismo camino que la API. Si cada handler validara por su cuenta, el
+auto-arranque acabaria siendo el camino con menos filtros --porque es el que se escribe el ultimo y
+con menos cuidado-- y se pierde dinero sin que nadie lo decida.
+
+`approved=True` de un gate es un VEREDICTO, no un permiso. La orden sale solo si
+`validate_entry.approved and execution_quality.approved`, y el motivo de cada uno se ensena por
+separado para que se sepa cual fallo.
+
+El status HTTP tamben lo elige el servicio, no la ruta, y no se colapsa todo a 400: un
+`sin_terminal` es 503 (reintentable) y un simbolo inexistente es 404. Un 400 para "no hay terminal"
+hace que un cliente que reintenta solo ante 5xx no reintente nunca, y la orden se pierde en el
+primer corte de conexion.
+
+### D-055 - `log_setup` va ANTES de `order_send`
+
+Una orden que sale y no se puede explicar es indistinguible de una orden que nunca se intento. Si
+el proceso muere entre el envio y el registro, con el registro primero la fila sigue ahi con
+`validated=1` y el resultado vacio, que es el estado "se intento y no consta". Al reves deja
+operaciones sin fila, y una operacion sin fila no sabe ni si ocurrio.
+
+Un rechazo por gate TAMBIEN se escribe, con `validated=0` y sus motivos: un rechazo sin fila no se
+puede depurar. Y los intentos de llenado se graban contra ESA MISMA fila, porque con un solo
+retcode final el 10030 del FOK desapareceria y el rechazo pareceria de un modo de llenado
+cualquiera.
+
+### D-056 - Las noticias fallan ABIERTO, pero el fallo abierto queda escrito
+
+Un calendario que no contesta y una ventana con noticia de alto impacto son hechos distintos.
+Bloquear por el primero deja el sistema parado por un fallo de feed. Se opera, pero la fila queda
+con `verdict="IGNORED_NEWS"`: la ausencia de veredicto es un dato que hay que poder ver, no un
+aprobado silencioso. Y un `block=True` manda sobre `fail_open`: si el calendario ha visto el
+evento, su respuesta gana aunque no este seguro del resto.
+
+### D-057 - Cerrar NO pasa por `symbols_allow` ni por el riesgo del dia
+
+Una lista blanca de simbolos para ABRIR no puede impedir cerrar lo que ya esta abierto: hacerlo
+dejaria la posicion viva sin ninguna manera de salir, y el unico remedio seria editar la config con
+la posicion abierta. El riesgo del dia limita abrir; cerrar con el contador a tope es exactamente
+lo que hay que poder hacer, porque es la operacion que REDUCE el riesgo.
+
+### D-058 - `tick_value` de MT5 ya es por UN lote: no se multiplica por `contract_size`
+
+`SYMBOL_TRADE_TICK_VALUE` es el dinero que mueve la cuenta por un tick de UN lote; el tamano del
+contrato ya esta dentro. Multiplicarlo otra vez por 100.000 en EURUSD inflaba el riesgo del lote en
+cinco ordenes de magnitud, y el sintoma era que toda operacion se rechazaba por "riesgo excede el
+presupuesto" con cifras de millones cuando el presupuesto eran decenas.
+
+Por eso la cuenta tiene UN nombre: `lot_calculator.risk_per_unit()`, usado tanto por el
+dimensionado (`_lote_por_riesgo`) como por la comprobacion del presupuesto. Si los dos calcularan
+por su cuenta, una diferencia entre ambos no daria error: daria un lote dimensionado con una cuenta
+y validado contra otra, con los dos numeros redondeados y con aspecto de razonables.
+
+### D-059 - El origen del riesgo se DECLARA, no se deduce
+
+`loss_per_lot_source` se lleva explicito en vez de deducirse de si la cifra existe. Deducirlo
+("si hay numero, es del broker") es como se llego a etiquetar de `broker` una estimacion hecha con
+el tick value: las dos producen un numero, asi que el numero no dice de donde salio. Un campo que
+miente sobre la procedencia del riesgo es peor que un campo ausente, porque alguien lo leera como
+una medicion del broker.
+
+### D-060 - Las comparaciones con umbral llevan tolerancia
+
+`abs(1.10050 - 1.10000) / 0.00100` da `0.500000000000167`, no `0.5`. Con un `>` a secas, una entrada
+EXACTAMENTE en el umbral --que la regla dice que se admite, porque dice "no puede superar"-- se
+rechazaba segun el redondeo del ultimo bit. Un gate que en el borde depende del redondeo no es un
+gate: el mismo setup se acepta o se rechaza segun la plataforma y nadie puede reproducir por que.
+
+La tolerancia (`execution_quality.EPSILON` = 1e-9) se aplica solo a las COMPARACIONES con umbral,
+que son decisiones. Las medidas se devuelven sin redondear, para que el log ensene el numero de
+verdad.
+
+### D-061 - Un cero medido no es un dato ausente
+
+El `spread` de 0.0 (bid == ask: cotizacion bloqueada o sesion de spread cero) es la MEJOR medida
+posible, y es el unico valor que la comprobacion de verdad de Python considera falso. Con
+`if sp_price` la fraccion caia a `None` y el gate marcaba `unknown` de spread por tener la condicion
+perfecta. Las comparaciones usan `is not None`; los denominadores siguen usando verdad a proposito,
+porque una distancia de referencia de 0 si es un hueco.
+
+### D-062 - La deduplicacion del watcher es memoria del PROCESO, y se pierde a proposito
+
+El estado de ciclo (`setup_state`) si se persiste, y por eso un setup detectado no se vuelve a
+anunciar. Los DESCARTES se deduplican distinto: por firma (score + motivos) en memoria del
+proceso. La razon de no persistirlo es que una dedup permanente oculte un rechazo NUEVO que se
+parece a uno viejo --el mismo setup, un mes despues, con el mismo score-- y un rechazo que no se
+ve es un rechazo que no se corrige. El coste de perder la memoria (reinicio del proceso) es escribir
+unas pocas filas de mas en `setup_log`, que es un ruido legible; el de no perderla seria un
+historico mudo.
+
+Por lo tanto la memoria de dedup tiene que VIVIR en el servicio y el servicio tiene que vivir mas
+que una peticion. Construir un `WatcherService` por `POST /scan` hace que la dedup no sirva de nada
+y que un setup por debajo del umbral escriba una fila cada `scan_interval_sec`, para siempre, sin
+que nada falle: el fallo se ve en el historico, un mes tarde, cuando ya no queda memoria del ciclo.
+De ahi `Runtime.watcher_service()` (una instancia por app) y el descarte de esa instancia cuando
+`set_market` cambia el mercado: escanear contra un mercado desconectado es peor que duplicar dos
+filas.
+
+### D-063 - El watcher evalua y audita; la ejecucion se declara ausente, no apagada
+
+`GET /api/watcher/status` publica los tres datos que el panel necesita y que no son lo mismo:
+`auto_execute_conf` (lo que dice `strategy.yaml`), `auto_execute` (siempre `false`, que es la
+lectura del interruptor) y `auto_execute_disponible` (`false`, con `auto_execute_motivo`). Publicar
+solo el valor del YAML haria que el panel rotulara AUTO-EJECUCION sobre un sistema que no manda
+nada; publicar solo `false` sin el motivo dejaria al operador culpa del interruptor.
+
+`POST /api/watcher/auto-execute` responde `501` en los dos sentidos. Con un `200 {"ok": false}`,
+`static/main.js` --que hace `res.ok ? res.json() : reject(...)`-- enseñaria "auto-ejecutar
+ACTIVADO" despues de encender un interruptor que no encendio nada. Apagar algo que no se puede
+encender tambien es no-op, asi que tampoco hay un 200 para `false`. El token se pide ANTES: sin
+token la ruta es `401`, porque decir a cualquiera que la funcion no existe es documentacion publica
+innecesaria.
+
+El watcher no tiene puerto de ejecucion. Ni atributo, ni dependencia, ni `order_send`: cuando el
+autoarranque entre, entra por `ExecutionService.execute_market_trade` con sus puertas (lista blanca,
+riesgo del dia, noticias, `validate_entry` y calidad de ejecucion). En REF el escaneo tenia un
+`executor` inyectado y con `auto_execute: true` mandaba la orden en el mismo ciclo que detectaba el
+setup, lo que convierte la bandera en una decision de arranque: el sistema empieza a operar solo
+desde que el proceso existe, sin nadie mirando cuando opera.
+
+`POST /api/watcher/scan` PIDE TOKEN aunque no mande ordenes: escribe en `setup_log` y
+`setup_state`, y quien puede escribir en la auditoria de operaciones es quien puede operar. Que no
+opere no lo vuelve lectura. Nota de frontend: `static/main.js` no manda token en ninguna escritura
+(incluida `/api/trade/market`), asi que con `API_TOKEN` puesto el boton de escaneo del panel
+devuelve `401` igual que el de operar. Es el contrato del frontend heredado, no una excepcion del
+watcher.
+# CALIBRACIÓN ORDER FLOW / CINTA REAL DATABENTO (2026-10-06)
+
+### D-064 - La raíz de datos es una VARIABLE, y la cinta no entra en el repo
+
+La cinta de Databento pesa más que el código y el repo vive dentro de OneDrive, así que la
+raíz no puede ser una constante dentro del árbol. `core/paths.py` expone `DATA_ROOT`
+(env `TRINITY_DATA_ROOT`, default `C:\Users\fmaur\Desktop\trinity_data`) y
+`data_root_guard_error(path)` devuelve el MOTIVO por el que una raíz no sirve: relativa
+(dependería del CWD del proceso), dentro del repo (OneDrive + git), dentro de cualquier
+OneDrive (gigabytes sincronizados a diario), dentro de REF (solo lectura). Devolver un motivo
+en vez de lanzar es deliberado: quien descarga (`research/fetch_databento.py`) decide, y el
+test fija que el default esté limpio y que cada regla dispare por separado. Un comentario
+sobre por qué no hay que meter datos aquí depende de que alguien lo lea; una función que
+devuelve el motivo no. La clave de API vive en `.env` gitignored (`.gitignore:9`) y
+`load_dotenv` lo llama el script de descarga, porque `core/` no puede importar `dotenv`
+(`tests/unit/test_core_purity.py` lo prohíbe).
+
+### D-065 - El umbral del Z-score se expresa como FRACCIÓN del techo, no como número
+
+`_update_zscore` actualiza la EMA con el mismo trade ANTES de puntuar, así que la varianza
+EWMA de la muestra es siempre la del propio tamaño y el Z queda acotado por
+`sqrt((w-1)/2)`: 4.9497 con `w=50`, 3.082 con `w=20`. Un umbral fijo de 4.5 con ventana 20
+queda POR ENCIMA de ese techo y el detector se apaga sin ningún error, en silencio: el fallo
+más caro posible, porque todo lo demás sigue en verde. `zscore_ceiling(ema_window)` y
+`OF_ZSCORE_THRESHOLD_FRAC = 0.91` hacen esa dependencia explícita, y `update_settings`
+recalcula el umbral absoluto cuando cambia la ventana (`settings_locked()` publica la
+fracción). El 0.91 reproduce el umbral calibrado (4.5 sobre techo 4.9497 = 90.91%) a 4.5043,
+diferencia menor que la resolución a la que se reporta el Z.
+
+### D-066 - `6E.c.0` es identidad, no contrato: se descarga y calibra contra `6EZ6`
+
+`OF_SYMBOL = "6E.c.0"` significa "próximo a expirar" y se recalcula solo: hoy resuelve a
+`6EV6` (octubre) con 246 trades al día, mientras el mercado rueda en `6EZ6` (diciembre) con
+51.118, 208 veces más. Se comprueba contra la simbología de la FECHA, no contra una
+constante: `6E.c.0` -> 42001229 -> `6EV6`, `6E.c.1` -> 42823529 -> `6EX6`,
+`6E.c.2` -> 5510 -> `6EZ6`. Decidido NO cambiar `OF_SYMBOL` a `6E.c.2`: es el líquido HOY y
+el offset numérico es frágil, mientras que `normalize_symbol("6E.c.0") == "6E"` es identidad
+y la esperan `test_base_adapter.py` y el frontend. Identidad y contrato negociado se
+separan: la identidad vive en `OF_SYMBOL`, la descarga y la calibración van contra `6EZ6` de
+forma explícita (`research/build_real_fixture.py::RESOLVED_SYMBOL`). El peligro no era tener
+el símbolo equivocado, era tenerlo EN SILENCIO: nada fallaba, simplemente se calibraba
+contra 246 trades.
+
+### D-067 - La calibración se declara contra un fixture real trazable; si las cifras históricas no se reproducen, se recalibran y se deja constancia
+
+Las cifras que `orderflow_config.py` citaba (4 h NY, ~20.5k trades, 620 prints a Z>=2.5, 42
+a Z>=4.5, ~10 zonas) no se reproducen en la cinta de 2026-10-05, y no se reproducen porque
+eran de OTRA sesión: ninguna ventana de 4 h pasa de 14.8k trades (así que "4 h" y "20.5k" ya
+chocaban entre sí en el propio original), a día completo hay 1511/116 y escalar a 20.5k da
+~616/47, y las ventanas de 8 h con 20-23k trades dan 627-653. La sesión original era de ~8 h
+y de otro día. Decisión: el fixture se fija en 8 h de NY (10:00-18:00 UTC del 2026-10-05,
+21926 trades de `6EZ6`), las cifras del docstring se REESCRIBEN a lo que ese fixture mide
+(631 / 61 / 8), y el historial 620/42/~10 se conserva en `MEJORAS_DATABENTO.md` porque
+borrarlo sin más haría que nadie supiera que alguna vez existió. No se cambia NINGÚN valor
+de umbral: solo la prosa que lo describe. Y como "documentarlo" no basta,
+`tests/unit/test_orderflow_real.py` fija el sha256 del fixture contra su sidecar y vuelve a
+medir el motor, de modo que o el archivo es el que dice el sidecar, o el módulo es lo que
+dice el test. Regenerar con `research/build_real_fixture.py`, no parchear el número a mano.

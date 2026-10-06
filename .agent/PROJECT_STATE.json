@@ -1,9 +1,9 @@
 {
   "project_name": "MultiMarket Quant Engine",
   "version": "0.1.0",
-  "active_phase": "Phase 4 - Macro/Ingestores (macro_ingestor/)",
-  "status": "phase_4_macro_ingestor_complete_ready_for_phase_5",
-  "last_updated": "2026-10-02T00:00:00Z",
+  "active_phase": "Phase 7 - Multi-mercado (forex + B3 + cripto)",
+  "status": "calibracion_order_flow_cinta_real_databento_terminada",
+  "last_updated": "2026-10-06",
   "blockers": [],
   "repo": {
     "versioned": true,
@@ -69,28 +69,78 @@
     "macro_ingestor/forex/dxy_service.py",
     "macro_ingestor/forex/calendar_news.py",
     "macro_ingestor/registry.py",
-    "tests/unit/test_macro_ingestor.py"
-  ],
-  "in_progress": [],
-  "pending_modules": [
-    "macro_ingestor/b3/* y macro_ingestor/crypto/* (NO son pendientes: descartados por D-026, sin contrato en REF. Declarados en registry.PENDIENTES y consultables con registry.faltantes())",
-    "core/decision_context.py (puro, de REF/decision_context.py; entra con el endpoint de auditoria en la Fase 6 segun D-028)",
+    "tests/unit/test_macro_ingestor.py",
+    "agent/ports.py",
+    "agent/tools.py",
     "agent/prompt_templates.py",
     "agent/laya_bridge.py",
-    "api/app.py",
+    "tests/unit/test_agent_ports.py",
+    "tests/unit/test_agent_tools.py",
+    "tests/unit/test_agent_prompts.py",
+    "tests/unit/test_laya_bridge.py",
+    "api/deps.py",
+    "api/errors.py",
+    "api/runtime.py",
     "api/websocket_manager.py",
+    "api/services/broker_clock.py",
+    "api/services/mt5_market.py",
+    "api/services/mt5_exports.py",
+    "api/services/macro_news.py",
     "api/routes/health.py",
     "api/routes/market.py",
-    "api/routes/trading.py",
     "api/routes/agent.py",
     "api/routes/journal.py",
-    "api/routes/db.py",
-    "static/index.html",
-    "static/css/style.css",
-    "static/js/main.js",
-    "static/js/tools.js",
-    "tests/integration (posponer tests de app.py/store.py a sus fases)",
-    "verify trading_hours.json session b3_fixed_income against B3 official schedule"
+    "api/routes/orderflow.py",
+    "api/app.py (create_app + lifespan + CORS + estaticos)",
+    "static/ (index.html, main.js, tools.js, style.css, echarts, lightweight-charts copiados de REF sin reescribir)",
+    "tests/unit/test_api_websocket_manager.py",
+    "tests/unit/test_api_services.py",
+    "tests/unit/test_api_market_port.py",
+    "tests/integration/test_api_routes.py",
+    "core/clock.py::from_epoch",
+    "core/market_view.py (validacion de bid_ratio)",
+    "database/store.py::get_config_summary (claves anidadas del YAML + fallback plano)",
+    "api/routes/__init__.py (contrato con el frontend: 43/47 rutas, con lo que falta en el docstring)",
+    "api/routes/macro.py (COT: GET /api/cot/report lee la tabla, POST /api/cot/refresh es el unico que sale a la red)",
+    "core/market_view.py::volume_profile (reparto del volumen real de las velas entre bins; source='bars')",
+    "api/services/mt5_market.py::smr (veredicto SMR con suelo neutro y motivo)",
+    "api/routes/__init__.py::TestContratoConElFrontend (el inventario de rutas faltantes, verificado en las dos direcciones)",
+    "tests/integration/test_api_routes.py: 101 tests (los 67 de antes + 34 de las rutas nuevas)",
+    "tests/unit/test_market_view.py: +8 de volume_profile",
+    "core/strategy.py (seam de configuracion: build_flat, resolvers risk_weights_for/killzones_for, min_score_for, sl_distance_for)",
+    "core/setup_gate.py (gate del setup, puro, extraido de REF/watcher.py: entry_zone, max_zone_span, plan_levels, killzone_forced_now, evaluate_gate)",
+    "api/routes/setup.py (GET /api/risk/setup y GET /api/chart/setup-eval)",
+    "api/routes/trading.py (las 4 rutas /api/trade/*, con el puerto de ejecucion pendiente)",
+    "adapters/base_adapter.py::SymbolSpec.plan_levels (delega en core.setup_gate)",
+    "tests/unit/test_setup_gate.py",
+    "core/setup_gate.py: la aritmetica del setup sale de watcher.py y es PURA; watcher se portara despues sin arrastrarla",
+    "core/strategy.py::risk_weights_for / killzones_for aceptan la config PLANA (JSON string) y la ANIDADA del YAML",
+    "api/routes/setup.py: synthetic=1 es 503 explicito (no hay MarketSimulator cableado, 6E)",
+    "api/services/mt5_market.py: _risk_engine(force_killzone) y chart_snapshot(force_killzone)",
+    "api/services/mt5_market.py::simbolo (normalizacion de simbolo compartida, no duplicada por router)",
+    "api/routes/__init__.py: /api/risk/setup y /api/chart/setup-eval salen del inventario de pendientes",
+    "tests/integration/test_api_routes.py: +21 (TestRiesgoSetup, TestSetupEval) y FakeMarket.chart_snapshot con force_killzone",
+    "tests/unit/test_setup_gate.py: 34 tests del gate, sin terminal ni HTTP",
+    "tests/unit/test_strategy.py: +9 de los resolvers de pesos y killzones",
+    "tests/unit/test_api_market_port.py: +2 de regresion (config plana del store, killzone forzada)",
+    "core/paths.py - raiz de datos externa y guardia (bloque 1)",
+    "core/orderflow_config.py - umbral como fraccion del techo + recalibracion (bloques 2/5)",
+    "research/fetch_databento.py - descarga real de cinta GLBX con sidecar sha256 (bloque 4)",
+    "research/build_real_fixture.py - fixture real regenerable byte-identico (bloque 5)",
+    "tests/unit/test_orderflow_real.py - reality-check sobre cinta real (bloque 5)",
+    "tests/unit/test_paths.py - guardian de la raiz de datos (bloque 1)",
+    "MEJORAS_DATABENTO.md - historico de roll, reconciliacion y parametros (bloque 6)"
+  ],
+  "in_progress": [
+    "el bucle del watcher: cuando exista, entra por ExecutionService (D-063). El scan por HTTP ya esta."
+  ],
+  "pending_modules": [
+    "core/decision_context.py + endpoint de auditoria (D-028)",
+    "api/routes/research.py (7 rutas de research/; fase posterior)",
+    "GET|POST /api/orderflow/feed y GET /api/orderflow/fixtures (dependen del proveedor de ticks, 6E) -> ya existe tests/fixtures/orderflow_6e_real.jsonl (D-067); sigue sin endpoint",
+    "GET /api/stream/{symbol} (SSE de ticks: falta decidir si vive o se elimina; el JS lo abre al montar el grafico)",
+    "verify trading_hours.json session b3_fixed_income against B3 official schedule",
+    "macro_ingestor/b3/* y macro_ingestor/crypto/* NO son pendientes: descartados por D-026 (sin contrato en REF), declarados en registry.PENDIENTES y consultables con registry.faltantes()"
   ],
   "phase_status": {
     "phase_0_scaffolding": "completed",
@@ -98,8 +148,8 @@
     "phase_2_database": "completed",
     "phase_3_adapters": "completed",
     "phase_4_macro_ingestor": "completed",
-    "phase_5_agent": "pending",
-    "phase_6_api_frontend": "pending",
+    "phase_5_agent": "completed",
+    "phase_6_api_frontend": "in_progress",
     "phase_7_validation": "pending"
   },
   "architecture_rules": {
@@ -119,9 +169,36 @@
     "chartism_engine_scope",
     "supporting_services_placement"
   ],
-  "decisions_phase_2": ["D-014", "D-015", "D-016"],
-  "decisions_phase_3": ["D-017", "D-018", "D-019", "D-020", "D-021"],
-  "decisions_phase_4": ["D-022", "D-023", "D-024", "D-025", "D-026", "D-027", "D-028"],
+  "decisions_phase_2": [
+    "D-014",
+    "D-015",
+    "D-016"
+  ],
+  "decisions_phase_3": [
+    "D-017",
+    "D-018",
+    "D-019",
+    "D-020",
+    "D-021"
+  ],
+  "decisions_phase_4": [
+    "D-022",
+    "D-023",
+    "D-024",
+    "D-025",
+    "D-026",
+    "D-027",
+    "D-028"
+  ],
+  "decisions_phase_5": [
+    "D-029",
+    "D-030",
+    "D-031",
+    "D-032",
+    "D-033",
+    "D-034",
+    "D-035"
+  ],
   "phase_1_results": {
     "tests": "258 passed, 2 xfailed (python -m pytest tests -q)",
     "baseline_before_phase_1": "875 passed, 2 xfailed (suite de REF, no de este repo)",
@@ -259,6 +336,46 @@
       "test_sweep_and_reverse_favors_sell (xfail): el COT pesa 0 desde 64883d3"
     ]
   },
+  "phase_5_results": {
+    "tests": "766 passed, 2 xfailed (python -m pytest tests -q)",
+    "tests_added": "test_agent_ports.py: 23, test_agent_tools.py: 60, test_agent_prompts.py: 71, test_laya_bridge.py: 56. Ninguno toca la red ni necesita terminal.",
+    "modules": [
+      "agent/ports.py (MarketPort, StorePort, NewsPort, ExportPort como Protocol; AgentDeps con now y sleep inyectables; AnalysisAnchors con TTL y tope por conversacion)",
+      "agent/tools.py (18 herramientas con esquema propio, execute_tool con timeout por herramienta, estados ok/failed/unavailable)",
+      "agent/prompt_templates.py (system prompt por mercado, risk_policy_lines, data_sources_policy, live_data_block, clock_lines, tool_digest)",
+      "agent/laya_bridge.py (router de proveedores con rotacion de claves, bucle de tool-calling, stream SSE)"
+    ],
+    "refactor": "REF/agent.py (1.308 lineas) pasa a cuatro modulos: los puertos, las herramientas, las plantillas y el bridge. El numero de lineas no es el logro; lo es que el bucle con fallback se pueda probar entero con un doble.",
+    "decisions": {
+      "D-029": "Los puertos son Protocol mas AgentDeps, y database/store.py los satisface sin adaptadores ni herencia",
+      "D-030": "Tres estados de herramienta (ok/failed/unavailable) en vez de dos: 'offline' mezclaba 'no esta en Market Watch' con 'MT5 no respondio'",
+      "D-031": "El agente transporta el score y no lo calcula (regla 19 de AGENT_GUIDELINES)",
+      "D-032": "completion es un seam: LiteLLM se importa dentro de la llamada, y un test AST lo impide subirlo",
+      "D-033": "done es un invariante del stream, y no hay failover despues del primer delta",
+      "D-034": "A la traza el digest con argumentos; al modelo, el payload completo",
+      "D-035": "La degradacion de un modelo local se avisa con status, y un tool call escrito se ejecuta sin enseñarse"
+    },
+    "bugs_found_in_ref": [
+      "REF emitia done en cinco ramas del bucle: anadir un camino nuevo lo olvidaba y el cliente se quedaba con el stream abierto para siempre.",
+      "REF encadenaba la respuesta del proveedor B sobre la del A cuando el stream se cortaba con texto ya emitido: dos respuestas superpuestas en pantalla.",
+      "REF persistia el mensaje del usuario y despues releia el historial: la pregunta llegaba dos veces al modelo.",
+      "REF guardaba en messages(role='tool') el JSON entero del resultado (cientos de KB en chart_snapshot) y no guardaba los argumentos de la llamada.",
+      "REF solo inyectaba el reloj en la ruta simple: la politica de riesgo que lee el modelo en modo herramientas habla de killzones en UTC.",
+      "REF anunciaba siempre 'MT5 no responde' cuando un dato no se podia leer, aunque lo que faltase fuera el calendario de noticias; el modelo traducia eso a 'no hay broker'.",
+      "El prompt de riesgo de REF leia claves planas (risk_weights, min_score, min_rr) que no existen en strategy.yaml, que es anidado (score.weights, score.min_score): la politica se degradaba a defaults silenciosos."
+    ],
+    "known_limits": [
+      "store.get_messages() aplica LIMIT antes de filtrar role='tool', asi que una ronda larga con traza reduce el historial util que ve el modelo. No se cambia el contrato en esta fase (D-034).",
+      "store.get_config_summary() sigue buscando claves planas (risk_weights, min_score, min_rr) contra el YAML anidado: el mismo bug que se corrigio en prompt_templates sigue vivo en la API. Pendiente para la Fase 6.",
+      "La degradacion a ruta simple se decide mirando el primer modelo de la cadena, no cada intento: si el primero es local y degrada, aunque un remoto este detras en el fallback, la ronda va sin herramientas.",
+      "parse_text_tool_call solo acepta un objeto JSON EXACTO (ver D-035). Una llamada con texto alrededor se entrega como respuesta al usuario, que es lo honesto ante la duda: interpretar como herramienta cualquier frase con llaves es la forma mas rapida de ejecutar cosas que nadie pidio."
+    ],
+    "not_implemented_deliberately": [
+      "Los endpoints de agente de REF/app.py: pertenecen a la Fase 6. El framing SSE (data: {json}\\n\\n, sin lineas event:) esta fijado por test para que ese port sea mecanico.",
+      "El cableado de AgentDeps a MT5/store reales: lo hace api/app.py en la Fase 6; mientras tanto todo se prueba con dobles.",
+      "Herramientas de B3 y cripto: las 18 son de Forex (precio, patrones, chart, orderflow, bitacora, noticias, exportaciones). Anadir las de otros mercados es Fase 6+, con sus puertos ya declarados"
+    ]
+  },
   "reference_code": {
     "path": "C:/Users/fmaur/Desktop/Trading",
     "writable": false,
@@ -310,5 +427,227 @@
       "tests/": "41 archivos de test + conftest.py + pytest.ini + fixtures + scenarios"
     }
   },
-  "stale_paths_to_clean": []
+  "stale_paths_to_clean": [],
+  "phase_6_results": {
+    "tests": "1144 passed, 2 xfailed (python -m pytest tests -q)",
+    "tests_added": "test_api_routes.py: 122 (101 + 21), test_setup_gate.py: 34 (nuevo), test_market_view.py: 30 (22 + 8), test_store.py: 32, test_api_market_port.py: 49 (47 + 2), test_strategy.py: 60 (51 + 9)",
+    "routes": "55 paths servidos; de ellos, 46 son los que llama static/main.js. Quedan 17 sin servir, inventariadas en el docstring de api/routes/__init__.py y verificadas por TestContratoConElFrontend",
+    "modules": [
+      "api/app.py (create_app(Runtime) con lifespan, CORS por peticion, X-Process-Time-Ms, estaticos y /api/docs)",
+      "api/runtime.py (Runtime.build() con los puertos reales; en app.state, no en variables globales)",
+      "api/deps.py (deps por peticion: store, market, news, exports, deps_agente, require_api_token)",
+      "api/errors.py (6 clases de error -> 404/503/502/503/503/400, cuerpo con error y status)",
+      "api/services/mt5_market.py (el puerto de mercado: 25 metodos sobre MT5, con _risk_engine, _cvd_para_score, _smr y smr)",
+      "api/services/broker_clock.py, mt5_exports.py, macro_news.py, setup_eval.py",
+      "api/services/setup_eval.py (compone la respuesta de las dos rutas y el overlay de ECharts; el calculo es de core.setup_gate)",
+      "api/websocket_manager.py (/ws/orderflow con estado inicial, difusion de ajustes y cierre 1008 sin token)",
+      "api/routes/{health,market,agent,journal,orderflow,macro,setup,trading}.py",
+      "core/setup_gate.py (gate puro: zona de entrada, niveles, killzone forzada y veredicto)",
+      "core/strategy.py (config plana, resolvers de pesos y killzones, umbral y distancia de SL)"
+    ],
+    "decisions": {
+      "D-036": "Runtime en app.state y puertos inyectados: create_app(Runtime(...)) levanta una app entera con dobles",
+      "D-037": "Los errores de las capas de datos se traducen por clase, no por try/except en cada ruta",
+      "D-038": "El token se lee por peticion y con compare_digest; sin API_TOKEN no se exige nada",
+      "D-039": "El contrato con el frontend se escribe (docstring + test), no se supone",
+      "D-040": "Ningun test abre database/trading.db, ni para leer (canario de hash en conftest.py)",
+      "D-041": "El orden de declaracion de las rutas es parte del contrato: overlay antes que {jid}",
+      "D-042": "El COT se lee de la tabla y solo se descarga en el refresh, que es el unico con token",
+      "D-043": "El Volume Profile reparte el volumen real de las velas; dentro de la vela el reparto es uniforme y declarado",
+      "D-044": "El gate del setup es de core/, no del router: las dos rutas comparten la aritmetica y en REF cada una la reconstruia (el panel y el boton de entrada llegaban a numeros distintos para el mismo setup)",
+      "D-045": "approved es el veredicto del gate, NO permiso de ejecucion. El blackout de noticias se publica pero no filtra: la puerta que bloquea esta donde se conoce la hora real de la orden",
+      "D-046": "synthetic=1 responde 503. Sin proveedor de ticks (6E) no hay MarketSimulator, y un 200 con velas reales bajo un flag de test es peor que un error",
+      "D-047": "Los resolvers de config aceptan la forma plana (JSON string) y la anidada del YAML: las dos existen en el repositorio, y aceptar una sola deja el otro camino con los defaults en silencio"
+    },
+    "bugs_found_in_ref": [
+      "get_config_summary leia claves planas de un YAML anidado: la UI pintaba 'sin reglas' con el sistema configurado (arreglado, con test contra el YAML real).",
+      "store.get_trading_config devuelve build_flat, donde risk_weights y killzones son JSON STRING. Pasarlos tal cual a setup_score reventaba con AttributeError: 'str' object has no attribute 'get' dentro de killzone_score: el except devolvia risk_engine.error y el panel se quedaba sin veredicto sin motivo. Ahora van por strategy.risk_weights_for / killzones_for.",
+      "Falta /api/db/tables/{table}, que es la que llama el JS: el inspector de la pestana de datos devolvia 404.",
+      "El sync de trades de REF no enlaza con setup_log (lo documenta el propio REF): aqui solo sincroniza.",
+      "test_pesos_de_produccion_entran_en_el_score pasaba por casualidad: los pesos del YAML y risk_engine.DEFAULT_WEIGHTS son identicos (los dos suman 85), asi que no distinguia 'config conectada' de 'defaults puestos'. Ahora mueve un peso y mira ese componente."
+    ],
+    "not_done_on_purpose": [
+      "GET /api/stream/{symbol} no se ha implementado: es un SSE de ticks y la decision de si el feed de 6E entra o no es de producto, no de codigo.",
+      "execution_quality (los warnings de spread y distancia a la invalidez) no se ha portado: core/setup_gate no expone una lista 'warnings' vacia, porque una clave siempre vacia es indistinguible de 'se midio y no hay nada que decir'.",
+      "api/services/macro_news.py sigue leyendo rutas anidadas (execution.news_buffer_min, data_sources.news) aunque el store entrega config plana: degrada a defaults. Sin tocar en esta ronda; el mismo patron que se acabo de corregir en el score."
+    ]
+  },
+  "phase_7_results": {
+    "milestone": "Scenarios de B3 y cripto sobre el mismo nucleo que el forex",
+    "tests": "1212 passed, 2 xfailed (python -m pytest tests -q)",
+    "tests_added": "test_markets_scenarios.py: 68 (nuevo). Los 6 scenarios de forex intactos.",
+    "scenarios": [
+      "tests/scenarios/b3_win_mini.json: minicontrato de indice de la B3, 130.000 con 0 decimales, punto de 5, tick de R$1,00",
+      "tests/scenarios/b3_wdo_mini.json: minicontrato de dolar de la B3, 5,850 con 3 decimales y pip_override; R:R 1,5 < 2,0 para que el gate lo rechace",
+      "tests/scenarios/crypto_btc_perp.json: perpetuo BTCUSDT, 65.000 con 1 decimal, macro por fear & greed y nocional en USDT"
+    ],
+    "shape": "Los tres son CLONES ESTRUCTURALES de killzone_edge_1min: mismo FVG + order block + barrido, mismo CVD punto por punto, misma forma de velas. Solo cambian la escala del precio, los digitos, la sesion y la unidad de dinero. Por eso la asercion central es una IGUALDAD de scores (82,4 los cuatro), no un minimo: si el score de BTCUSDT no es el de EURUSD, el nucleo tiene un supuesto de forex dentro.",
+    "market_block": "El bloque `market` de los scenarios de B3/cripto lleva digits, point, tick_size, tick_value, contract_size, min_lot, lot_step, risk_amount, lot_calculator, market_type y session_id. Los de forex no lo llevan y make_symbol_spec() devuelve None para ellos: sus specs vienen del broker, no de un JSON de test.",
+    "decisions": {
+      "D-048": "Las fabricas de tests llevan la unidad del mercado, no la del forex: `digits` en make_candles/make_trades (round(x,5) sobre WIN deja una serie que ningun feed emite) y `current_price` obligatorio en make_snapshot_from_scenario, que antes valaba BTCUSDT contra el precio de EURUSD si faltaba.",
+      "D-049": "Los scenarios de B3/cripto se validan contra config/, no contra el criterio del test: lot_calculator, market_type y session_id tienen que coincidir con asset_sources_map.yaml, y la ventana UTC del scenario con sessions de trading_hours.json (corrida al UTC del exchange). Una sesion escrita a mano seria un calendario paralelo.",
+      "D-050": "Un pip_override descarta la convencion forex: si el bróker fija la unidad a mano, 'pips' es una etiqueta falsa aunque el simbolo cotice a 3 decimales. El minicontrato de dolar de la B3 sin esto reportaba un SL de 30 puntos como '3,0 pips'."
+    },
+    "bugs_found": [
+      "SymbolSpec.pip_quote miraba solo los digitos e ignoraba el pip_override: con 3 digitos + override (WDO) la unidad era el punto de 0,001 pero la etiqueta decia 'pips'. Es el mismo error que se corrigio para el oro, en el otro sentido: el override existe justo para los simbolos que no cotizan como un par de divisas.",
+      "core.setup_gate.entry_zone calculaba el span y solo lo devolvia en el camino ZONE_TOO_FAR: en un setup valido, evaluate_gate publicaba zone_span=None y quien recibia el plan veia el limite pero no cuanto margen le quedaba. Ahora span viaja tambien cuando hay zona."
+    ],
+    "coherencia_de_unidades": "El primer WDO declaraba digits 3 con tick_size 0,0005, que es incoherente: un simbolo con 3 decimales no cotiza en 4. Corregido a tick_size 0,001 y tick_value 10,00 (USD por punto de un contrato de 10.000), que deja el riesgo por contrato en 300 exactamente.",
+    "not_done_on_purpose": [
+      "Los adaptadores de B3 y cripto (MT5B3Adapter, BinanceWSAdapter, NelogicaProfitAdapter, CedroTechnologiesAdapter, BybitCCXTAdapter) siguen sin usar: construyen pero fallan al ejecutar. Los scenarios no los necesitan porque trabajan con la forma normalizada {time, open, high, low, close, volume}; conectarlos es un hito aparte.",
+      "No se aadio un scenario de b3_fixed_income (NTN-F): su sesion esta marcada confidence=unverified en trading_hours.json, y un test que fijara esa ventana le daria una autoridad que el archivo todavia no tiene."
+    ]
+  },
+  "phase_8_results": {
+    "hito": "Puerto de ejecucion MT5 + watcher automatico",
+    "estado": "puerto de ejecucion CERRADO; watcher en modo scan/status CERRADO",
+    "modulos_nuevos": [
+      "core/execution_quality.py (gate puro: deriva de entrada, spread sobre SL, invalidacion alcanzable)",
+      "adapters/forex/mt5_execution.py (MT5ExecutionAdapter: order_send, order_calc_profit, close_position)",
+      "api/services/execution.py (ExecutionService: la puerta UNICA de salida)",
+      "tests/unit/test_execution_quality.py (21)",
+      "tests/unit/test_mt5_execution.py (30)",
+      "tests/unit/test_execution_service.py (58)",
+      "core/setup_lifecycle.py (puro: maquina de estados del setup, TTL de dedup y firma de rechazo)",
+      "api/services/watcher_service.py (WatcherService: estado() y escanear(); sin puerto de ejecucion)",
+      "api/routes/watcher.py (GET /status, POST /scan con token, POST /auto-execute con 501)",
+      "tests/unit/test_setup_lifecycle.py (39)",
+      "tests/unit/test_watcher_service.py (37)"
+    ],
+    "modulos_modificados": [
+      "api/services/mt5_market.py (daily_risk_state con blocked/reasons/trades_counted)",
+      "api/runtime.py (Runtime.execution cableado, misma Session)",
+      "api/routes/trading.py (GET /api/trade/info/{symbol}, POST /api/trade/market, POST /api/positions/{ticket}/close)",
+      "core/lot_calculator.py (risk_per_unit publico)",
+      "api/runtime.py (Runtime.watcher: una instancia por app, porque la dedup de descartes es memoria del proceso)",
+      "api/routes/__init__.py (las tres rutas del watcher salen del inventario de pendientes del frontend)"
+    ],
+    "tests": "1442 passed, 2 xfailed",
+    "decisiones": [
+      "D-054",
+      "D-055",
+      "D-056",
+      "D-057",
+      "D-058",
+      "D-059",
+      "D-060",
+      "D-061",
+      "D-062",
+      "D-063"
+    ],
+    "verificado_contra_bróker_real": [
+      "SYMBOL_FILLING_MODE es MASCARA de bits: EURUSD=1 (solo FOK), XAUUSD=3, DE40/US500=2",
+      "ORDER_FILLING_FOK=0, ORDER_FILLING_IOC=1",
+      "order_send devuelve objeto MqlTradeResult o None, nunca dict"
+    ],
+    "bugs_corregidos_en_este_hito": [
+      "riesgo por lote inflado 100.000x (tick_value de MT5 ya es por un lote)",
+      "loss_per_lot_source decia broker cuando la cifra era estimacion",
+      "spread 0.0 tratado como dato ausente",
+      "umbral de deriva rechazando en el borde por redondeo de coma flotante",
+      "NameError en la nota de lote dimensionado (riesgo_pct) y en la respuesta (perdida_por_lot)",
+      "componentes_del_score buscaba la direccion como buy/sell cuando el snapshot la publica como bull/bear: el breakdown de la fila salia vacio",
+      "audit_logged sumaba los ids de fila en vez de contarlos",
+      "los descartes se deduplicaban en un servicio nuevo por peticion: la memoria no sobrevivia entre dos POST /scan y un setup por debajo del umbral escribia una fila por ciclo, sin que nada fallara"
+    ],
+    "auto_execute": false,
+    "tests_added_watcher": "tests/unit/test_setup_lifecycle.py: 39, tests/unit/test_watcher_service.py: 37, TestWatcher + TestWatcherCompartido en tests/integration/test_api_routes.py: 16",
+    "auto_execute_publicado": "GET /api/watcher/status publica auto_execute=false SIEMPRE, mas auto_execute_conf (el YAML), auto_execute_disponible=false y auto_execute_motivo. POST /api/watcher/auto-execute responde 501 en los dos sentidos con el token puesto antes, porque static/main.js hace res.ok ? json() : reject() y un 200 ensenaria 'ACTIVADO' tras encender un interruptor que no encendio nada.",
+    "verificado_por_http": [
+      "status sin token (es una lectura); scan sin token = 401 porque escribe setup_log y setup_state",
+      "auto-execute sin token = 401 y con token = 501 para enabled true y false; sin cuerpo = 422",
+      "dos POST /scan seguidos dejan UNA sola fila de descarte en setup_log",
+      "un simbolo sin risk_engine da evento error y no tumba el ciclo",
+      "un calendario caido sale en avisos del ciclo, no solo en la fila"
+    ]
+  },
+  "orderflow_calibration_results": {
+    "hito": "Calibracion Order Flow con cinta real de Databento",
+    "fecha": "2026-10-06",
+    "estado": "completo",
+    "tests": "1477 passed, 2 xfailed",
+    "tests_baseline_antes": "1465 passed, 2 xfailed",
+    "tests_anadidos": "tests/unit/test_orderflow_real.py: 12 (procedencia del fixture, estadisticos de la cinta, umbrales sobre datos reales)",
+    "decisiones": [
+      "D-064",
+      "D-065",
+      "D-066",
+      "D-067"
+    ],
+    "bloques": [
+      "1. core/paths.py: DATA_ROOT fuera del repo/OneDrive + data_root_guard_error()",
+      "2. Umbral del Z-score como fraccion del techo (OF_ZSCORE_THRESHOLD_FRAC = 0.91)",
+      "3. Unidades honestas: 'lotes' -> 'contratos'",
+      "4. research/fetch_databento.py: descarga real GLBX + sidecar sha256",
+      "5. Fixture real 21926 trades (8 h NY) + 12 tests de reality-check",
+      "6. Memoria .agent/ y MEJORAS_DATABENTO.md"
+    ],
+    "ficheros_nuevos": [
+      "research/fetch_databento.py",
+      "research/build_real_fixture.py",
+      "tests/fixtures/orderflow_6e_real.jsonl",
+      "tests/fixtures/orderflow_6e_real.meta.json",
+      "tests/unit/test_orderflow_real.py",
+      "tests/unit/test_paths.py",
+      "MEJORAS_DATABENTO.md",
+      ".env (gitignored)"
+    ],
+    "ficheros_modificados": [
+      "core/paths.py",
+      "core/orderflow_config.py",
+      "core/orderflow_engine.py",
+      "tests/unit/test_simulator.py",
+      "requirements.txt"
+    ],
+    "datos_fuera_del_repo": {
+      "raiz": "C:\\Users\\fmaur\\Desktop\\trinity_data",
+      "raw": "C:\\Users\\fmaur\\Desktop\\trinity_data\\databento\\raw",
+      "parquets": [
+        "GLBX_6E_c_0_trades_2026-10-05_2026-10-06 (246 trades, 0.0003 USD) [control, liquidez baja]",
+        "GLBX_6EZ6_trades_2026-10-05_2026-10-06 (51118 trades, 0.0640 USD) [contrato liquido]"
+      ],
+      "api_key": "DATABENTO_API_KEY en .env (gitignored) - ROTAR, se comenzo en texto plano"
+    },
+    "fixture": {
+      "fichero": "tests/fixtures/orderflow_6e_real.jsonl",
+      "sidecar": "tests/fixtures/orderflow_6e_real.meta.json",
+      "simbolo": "6EZ6 (diciembre), NO 6E.c.0 (octubre, 246 trades/dia = 208x menos liquido)",
+      "ventana_utc": "2026-10-05 10:00 -> 18:00 (8 h de NY)",
+      "trades": 21926,
+      "sha256_lf": "f58029a3bc004e3e3d56b5e16c767c4b4f876a50961b5bf56eadc32cb6bed29f",
+      "regenerar": "python research/build_real_fixture.py (byte-identico, no parchear a mano)"
+    },
+    "mediciones_del_fixture": {
+      "size_media": 4.156,
+      "size_mediana": 2.0,
+      "precios_distintos": 64,
+      "prints_size_ge_75": 16,
+      "vol300_min": 837,
+      "vol300_media": 1249,
+      "zscore_threshold": 4.5043,
+      "zscore_ceiling_w50": 4.9497,
+      "z_ge_2_5": 631,
+      "z_ge_4_5": 61,
+      "spikes_con_gate": 8,
+      "zonas_absorcion": 1,
+      "z_ge_5_0": 0,
+      "cvd": -2420
+    },
+    "hallazgos": [
+      "El roll: 6E.c.0->6EV6 (246 trades/dia) vs 6E.c.2->6EZ6 (51118/dia) = 208x; validar el symbole a dia de hoy, no contra una constante",
+      "db.Side.__doc__ confirma A/B = lado del AGRESOR en trades y N = sin agresor; excluir N",
+      "Ninguna ventana de 4h supera 14800 trades: las cifras historicas 620/42/~10 venian de ~8h de OTRO dia (se reescalaron a 631/61/8 sin tocar umbrales)",
+      "El techo del Z-score es sqrt((w-1)/2): umbral fijo 4.5 con ema_window=20 apaga el detector en silencio",
+      "ts_event es datetime64[ns, UTC]: leer .value (ns), no float() directo",
+      "databento 0.85: db.Historical() no History; stype_in=continuous solo admite stype_out en {instrument_id, parent, continuous}; instrument_id->codigo requiere 2a llamada",
+      "pyarrow 25.0.1 y databento 0.85.0 anadidos a requirements; ruff/black/mypy no instalados (lint manual)"
+    ],
+    "fuera_de_alcance": [
+      "Redes neuronales (postergadas; baseline = motor determinista)",
+      "MBO",
+      "data_sources.orderflow: true",
+      "Cablear databento_cme.py como feed en vivo",
+      "Endpoints /api/orderflow/feed y /api/orderflow/fixtures"
+    ]
+  }
 }

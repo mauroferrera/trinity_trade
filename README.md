@@ -6,9 +6,10 @@ Núcleo determinista agnóstico al mercado + adaptadores por proveedor + capa de
 explicabilidad con LLM. Un único monorepo; la activación de fuentes es dinámica
 vía `config/asset_sources_map.yaml`.
 
-> **Estado:** Fases 0–4 completadas. `core/`, `database/`, `adapters/` y
-> `macro_ingestor/` están implementados y verificados por tests. Siguiente: Fase 5
-> (`agent/`). Ver [Estado real](#estado-real) y `.agent/PROJECT_STATE.json`.
+> **Estado:** Fases 0–5 completadas. `core/`, `database/`, `adapters/`,
+> `macro_ingestor/` y `agent/` están implementados y verificados por tests.
+> Siguiente: Fase 6 (`api/` y `static/`). Ver [Estado real](#estado-real) y
+> `.agent/PROJECT_STATE.json`.
 
 ---
 
@@ -179,13 +180,20 @@ Ninguna suite unitaria debe depender de MT5: los adaptadores se prueban con mock
   tiempo, `calendar_news` Forex Factory con gate *fail-open*) y `registry.py`, que
   traduce los nombres de `asset_sources_map.yaml` a módulos reales y **reporta en vez
   de filtrar** lo que no resuelve. Ningún test toca la red.
+- **Fase 5 · `agent/`** — `ports.py` (contratos `Protocol` y `AgentDeps`: importar el
+  agente no abre terminal ni carga un cliente de LLM), `tools.py` (18 herramientas con
+  tres estados: `ok`, `failed` y `unavailable`), `prompt_templates.py` (prompt por
+  mercado, política de riesgo y procedencia de cada fuente) y `laya_bridge.py` (router
+  de proveedores, bucle de tool-calling y stream SSE). LiteLLM entra por un seam
+  `completion` y se importa solo dentro de la llamada, de modo que el fallback con
+  rotación de claves se prueba entero sin red.
 
-Suite completa: **556 passed, 2 xfailed** (`pytest tests -q`). Los dos `xfail` son
+Suite completa: **766 passed, 2 xfailed** (`pytest tests -q`). Los dos `xfail` son
 decisiones de calibración heredadas de la Fase 1, no código roto.
 
 ### Pendiente
 
-`agent/`, `api/` y `static/` están aún sin implementar. Los cinco adaptadores de B3 y
+`api/` y `static/` están aún sin implementar. Los cinco adaptadores de B3 y
 cripto están en **esqueleto**: faltan elegir proveedor (decisión de negocio), no código.
 
 Las ocho fuentes macro de B3 y cripto que declara `asset_sources_map.yaml`

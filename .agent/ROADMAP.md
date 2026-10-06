@@ -95,50 +95,85 @@ Ver `DECISIONS.md` (D-005) y `PROJECT_STATE.json` (`reference_code`).
 - [x] **Tests:** unit tests ingestors (mocks HTTP) pasan en verde — 89 en `test_macro_ingestor.py`, ninguno toca la red
 
 ## Fase 5 – Agente IA (`agent/`)
-**Estado:** Pendiente | **Prioridad:** Media
+**Estado:** Completa | **Prioridad:** Media
 
 **Hitos:**
-- [ ] `agent/prompt_templates.py` (plantillas dinámicas por mercado/contexto)
-- [ ] `agent/laya_bridge.py` (bridge reutilizando lógica `REF/agent.py`)
-- [ ] Migrar tools/router/SSE de `REF/agent.py` → nueva estructura
-- [ ] Mejorar persistencia de `tool results` (deuda menor)
+- [x] `agent/ports.py` (los puertos que el agente necesita, y `AgentDeps`)
+- [x] `agent/tools.py` (18 herramientas, esquemas y execution con puertos)
+- [x] `agent/prompt_templates.py` (plantillas dinámicas por mercado/contexto)
+- [x] `agent/laya_bridge.py` (router + bucle de herramientas + stream SSE)
+- [x] Migrar tools/router/SSE de `REF/agent.py` → nueva estructura (1.308 líneas → 4 módulos)
+- [x] Mejorar persistencia de `tool results`: digest con argumentos a la traza, payload
+      completo al modelo (D-034)
+- [x] Endpoints `agent` de REF `app.py` — **no portados aquí**: pertenecen a la Fase 6
 
 **Criterios de Aceptación:**
-- [ ] Flujo SSE/tool-calling preservado (sin romper endpoints agent existentes durante transición)
-- [ ] Prompts dinámicos por contexto/mercado funcionales
-- [ ] Persistencia tool results mejorada (verificada)
-- [ ] **Tests:** tests agent/tools (mocks) pasan en verde
+- [x] Flujo SSE/tool-calling preservado: framing `data: {json}\n\n` y el tipo dentro del JSON
+- [x] `done` es un invariante del stream, no una etiqueta por rama (D-033)
+- [x] Prompts dinámicos por contexto/mercado funcionales
+- [x] Persistencia de tool results mejorada y verificada con test
+- [x] `import agent` no abre MT5 ni carga LiteLLM (seam `completion`, D-032)
+- [x] **Tests:** 60 de herramientas, 23 de puertos, 71 de prompts, 56 del bridge —
+      suite completa **766 passed, 2 xfailed**, ninguno toca la red
 
 ## Fase 6 – API (`api/`) + Frontend (`static/`)
-**Estado:** Pendiente | **Prioridad:** Alta
+**Estado:** En curso | **Prioridad:** Alta
 
 **Hitos:**
-- [ ] Extraer rutas `REF/app.py` → `api/routes/` (health, market, trading, agent, journal, db)
-- [ ] Mover WebSocket → `api/websocket_manager.py`
-- [ ] Reducir `api/app.py` a bootstrap/middlewares/mounts
-- [ ] Mover estáticos → `static/` (reestructurar `css/`, `js/`, `js/components/`). Actualizar `StaticFiles` mount
-- [ ] Desacoplar lógica negocio (OrderFlow/trading) → `core/`/servicios
+- [x] Extraer rutas `REF/app.py` → `api/routes/` (health, market, trading, agent, journal, orderflow, macro, db, setup)
+- [x] Mover WebSocket → `api/websocket_manager.py`
+- [x] Reducir `api/app.py` a bootstrap/middlewares/mounts
+- [x] Mover estáticos → `static/` (ficheros de REF copiados sin reescribir). Actualizar `StaticFiles` mount
+- [x] Desacoplar lógica negocio (OrderFlow/trading/setup) → `core/`/servicios
+- [x] Contrato con `static/main.js` escrito y verificado en las dos direcciones (46 servidas, 17 pendientes inventariadas)
+- [ ] `api/routes/watcher.py` (status/scan/auto-execute) — el gate del setup ya está en `core/setup_gate.py`; falta el bucle y el envío de órdenes
+- [ ] `/api/orderflow/feed`, `/api/orderflow/fixtures`, `/api/stream/{symbol}` — dependen del proveedor de ticks (6E)
+- [ ] `execution_quality` (warnings de spread y distancia a la invalidez)
 
 **Criterios de Aceptación:**
-- [ ] `api/app.py` reducido (liviano). Lógica negocio **fuera de endpoints** (endpoints delgados)
-- [ ] Rutas migradas con funcionalidad equivalente
-- [ ] Frontend sirve correctamente desde `/static` (FastAPI StaticFiles)
-- [ ] **Tests:** integration tests API básicos pasan en verde
-- [ ] Smoke test: servidor arranca sin errores (`uvicorn api.app:app --check` o import)
+- [x] `api/app.py` reducido (liviano). Lógica negocio **fuera de endpoints** (endpoints delgados)
+- [x] Rutas migradas con funcionalidad equivalente
+- [x] Frontend sirve correctamente desde `/static` (FastAPI StaticFiles)
+- [x] **Tests:** integration tests API en verde (1144 passed, 2 xfailed)
+- [x] Smoke test: import de `api.app:app` OK
 
 ## Fase 7 – Tests, Configuración y Validación
-**Estado:** Pendiente | **Prioridad:** Crítica (Validación Final)
+**Estado:** En curso (hito de scenarios B3/cripto cerrado) | **Prioridad:** Crítica (Validación Final)
 
 **Hitos:**
-- [ ] Completar/ajustar `config/asset_sources_map.yaml` + `trading_hours.json`. Mantener `strategy.yaml` vigente
-- [ ] Ampliar `tests/scenarios/` con mocks JSON por mercado (B3/Forex/Cripto)
-- [ ] Ejecutar `pytest tests/` tras cada subfase (regresión continua)
-- [ ] Integración end-to-end (watcher + API + core) con datos mock
-- [ ] Verificación core agnóstico + sin dependencias MT5 en tests unitarios
+- [ ] Completar/ajustar `config/asset_sources_map.yaml` + `trading_hours.json`. Mantener `strategy.yaml` vigente — falta validar `b3_fixed_income` contra la grade oficial de la B3 (`confidence: unverified`)
+- [x] Ampliar `tests/scenarios/` con mocks JSON por mercado (B3/Forex/Cripto) → 9 scenarios: 6 forex + `b3_win_mini`, `b3_wdo_mini`, `crypto_btc_perp`
+- [x] Ejecutar `pytest tests/` tras cada subfase (regresión continua) → **1212 passed, 2 xfailed**
+- [ ] Integración end-to-end (watcher + API + core) con datos mock — bloqueada: `api/routes/watcher.py` sin portar y necesita el puerto de ejecución
+- [x] Verificación core agnóstico + sin dependencias MT5 en tests unitarios → `test_markets_scenarios.py` (68 tests): los scenarios de B3/cripto son clones estructurales del forex y exigen **score idéntico**
+- [ ] Conectar los adaptadores de B3/cripto al doble de mercado: hoy construyen pero fallan al usar
 
 **Criterios de Aceptación:**
-- [ ] **Suite completa `pytest tests/` pasa en VERDE** (0 failures)
-- [ ] Configs válidas (YAML/JSON parseables)
-- [ ] E2E smoke tests con mocks OK (sin abrir MT5)
+- [x] **Suite completa `pytest tests/` pasa en VERDE** (0 failures)
+- [x] Configs válidas (YAML/JSON parseables) — y ahora los scenarios se validan contra ellas, no contra el criterio del test
+- [ ] E2E smoke tests con mocks OK (sin abrir MT5) — la parte API + core ya está cubierta por los tests de integración
 - [ ] Proyecto estructurado listo para desarrollo/producción según arquitectura objetivo
-- [ ] `PROJECT_STATE.json` actualizado a fase estable/completada según alcance decidido
+- [x] `PROJECT_STATE.json` actualizado a fase estable/completada según alcance decidido → `phase_7_scenarios_b3_cripto_done`
+
+## Hito transversal – Calibración Order Flow con cinta real de Databento
+**Estado:** Completa (2026-10-06) | **Prioridad:** Alta (baseline de order flow)
+
+**Hitos:**
+- [x] Bloque 1 – `core/paths.py`: `DATA_ROOT` fuera del repo y fuera de OneDrive, con `data_root_guard_error()`
+- [x] Bloque 2 – Umbral del Z-score como fracción del techo (`OF_ZSCORE_THRESHOLD_FRAC = 0.91`)
+- [x] Bloque 3 – Unidades honestas ("lotes" → "contratos")
+- [x] Bloque 4 – `research/fetch_databento.py`: descarga real de GLBX con sidecar sha256
+- [x] Bloque 5 – Fixture real `tests/fixtures/orderflow_6e_real.jsonl` (21926 trades, 8 h NY) + 12 tests de reality-check
+- [x] Bloque 6 – Memoria: `MEJORAS_DATABENTO.md`, D-064..D-067, checklist, roadmap, `PROJECT_STATE.json`
+
+**Criterios de Aceptación:**
+- [x] Los datos de cinta viven en `C:\Users\fmaur\Desktop\trinity_data`, nunca en el repo ni en OneDrive
+- [x] Umbral derivado del techo matemático: cambiar `ema_window` no puede apagar el detector en silencio
+- [x] Calibración declarada contra un fixture con sha256 trazable y regenerable (`research/build_real_fixture.py`)
+- [x] **Tests:** 1477 passed, 2 xfailed (baseline 1465 + 12 de reality-check)
+
+**Pendientes explícitos (fuera del alcance de este hito):**
+- [ ] Rotar la clave de Databento (se empezó en texto plano antes de pasarla a `.env`)
+- [ ] `data_sources.orderflow: true` y cablear `adapters/forex/databento_cme.py` como feed en vivo
+- [ ] `GET|POST /api/orderflow/feed` y `GET /api/orderflow/fixtures` — el fixture ya existe, el endpoint no
+- [ ] Redes neuronales: postergadas; el motor determinista (`smc_engine.py` + `orderflow_engine.py`) sigue siendo el baseline
