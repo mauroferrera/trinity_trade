@@ -14,11 +14,13 @@ Run:  python -m pytest tests/unit/test_orderflow.py -v
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pytest
 
 from adapters import synthetic_feed as mock_feed
+from core.orderflow_config import OF_ZSCORE_THRESHOLD, zscore_ceiling
 from core.orderflow_engine import OrderFlowEngine
 
 from ..conftest import make_trades
@@ -104,6 +106,69 @@ class TestZScoreSpike:
                 break
         assert found
         assert eng.snapshot()["spike_count"] >= 1
+
+
+class TestZScoreCeiling:
+    """El umbral del detector es una FRACCIÓN del techo de Z, no un número fijo.
+
+    El techo existe porque `_update_zscore` puntúa después de actualizar la EMA
+    con el propio trade: la varianza del 2º print es exactamente la de ese
+    print, y de ahí sale `sqrt((w-1)/2)`. Si el umbral absoluto no se expresa
+    contra ese techo, una ventana más corta lo deja por encima de él y el
+    detector se apaga en silencio.
+    """
+
+    def test_ceiling_matches_derived_bound(self):
+        assert zscore_ceiling(50) == pytest.approx(math.sqrt(49 / 2), rel=1e-12)
+        assert zscore_ceiling(20) == pytest.approx(math.sqrt(19 / 2), rel=1e-12)
+        # `update_settings` acota la ventana a 2; una ventana aún menor no
+        # debe poder producir techo 0 (dividiría entre cero al rederivar).
+        assert zscore_ceiling(1) == pytest.approx(math.sqrt(1 / 2), rel=1e-12)
+
+    def test_default_threshold_reproduces_calibration(self):
+        # 0.91 del techo de w=50 = 4.5043, es decir el 4.5 calibrado.
+        assert OF_ZSCORE_THRESHOLD == pytest.approx(4.5043, abs=5e-4)
+
+    def test_z_never_exceeds_ceiling(self):
+        """El techo es supremo alcanzable: ningún print puede superarlo."""
+        eng = OrderFlowEngine()
+        ceiling = zscore_ceiling(eng.ema_window)
+        worst = 0.0
+        sizes = [4, 3, 5, 4] * 12 + [1000, 1, 1, 5000, 75]
+        for i, size in enumerate(sizes):
+            payload = eng.add_trade(price=1.1, size=size, side="A", ts=1e9 + i)
+            assert payload is not None
+            worst = max(worst, abs(payload["zscore"]))
+        # payload["zscore"] viene redondeado a 2 decimales.
+        assert worst <= ceiling + 0.01
+
+    def test_narrow_window_keeps_detector_alive(self):
+        """Con w=20 el techo baja a 3.08: un umbral fijo de 4.5 lo apagaría."""
+        eng = OrderFlowEngine()
+        eng.update_settings(ema_window=20)
+        settings = eng.settings()
+        assert settings["zscore_threshold"] == pytest.approx(
+            settings["zscore_threshold_frac"] * zscore_ceiling(20)
+        )
+        assert settings["zscore_threshold"] < zscore_ceiling(20), (
+            "el umbral no puede superar el techo: el detector quedaría muerto"
+        )
+
+    def test_absolute_threshold_survives_window_change(self):
+        """Un umbral explícito se fija en absoluto, pero su fracción se guarda."""
+        eng = OrderFlowEngine()
+        eng.update_settings(zscore_threshold=3.0)
+        frac = eng.settings()["zscore_threshold_frac"]
+        assert frac == pytest.approx(3.0 / zscore_ceiling(50))
+        eng.update_settings(ema_window=20)
+        assert eng.settings()["zscore_threshold"] == pytest.approx(
+            frac * zscore_ceiling(20)
+        )
+
+    def test_explicit_absolute_wins_when_both_are_sent(self):
+        eng = OrderFlowEngine()
+        eng.update_settings(ema_window=20, zscore_threshold=3.0)
+        assert eng.settings()["zscore_threshold"] == 3.0
 
 
 class TestAbsorptionTrigger:

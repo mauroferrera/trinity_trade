@@ -216,7 +216,8 @@ class TestSyntheticSweep:
         assert pat["analysis"]["patterns"].get("fvgs") is not None
 
     def test_impulse_has_spikes_with_rising_cvd(self):
-        # Checklist: Z>=4.5 + CVD↑ durante el impulso comprador que rompe el PDH.
+        # Checklist: Z sobre el umbral calibrado (0.91 del techo, ~4.5) + CVD↑
+        # durante el impulso comprador que rompe el PDH.
         eng = OrderFlowEngine()
         peak_cvd, spikes_while_up = -1e18, 0
         for t in _load("sweep_and_reverse.jsonl"):
@@ -239,7 +240,7 @@ class TestScenarioAudit:
         _feed_engine(eng, trades)
         _feed_sim(s, trades)
 
-        # (1) Z>=4.5 presente (umbral calibrado contra la cinta real): los
+        # (1) Z sobre el umbral calibrado (0.91 del techo, ~4.5): los
         # prints institucionales agrupados se comprimen en un episodio y el
         # rostro sell-side de la reversión lo confirma con direcciones.
         assert eng.snapshot()["spike_count"] >= 1
@@ -459,8 +460,9 @@ class TestLatencyStressAudit:
         eng = OrderFlowEngine()
         _feed_engine(eng, trades)
         snap = eng.snapshot()
-        # Ráfagas de 80-300 lotes: volumen alto. Con el umbral calibrado
-        # (Z >= 4.5 + gate size >= 75) las ráfagas consecutivas se comprimen
+        # Ráfagas de 80-300 contratos: volumen alto. Con el umbral calibrado
+        # (Z sobre 0.91 del techo, ~4.5, + gate size >= 75) las ráfagas
+        # consecutivas se comprimen
         # en un único episodio: el primer print del burst cruza la Z y los
         # siguientes mantienen la varianza de la EMA alta, así que el loop de
         # estrés no debe perder la señal ni desincronizar.

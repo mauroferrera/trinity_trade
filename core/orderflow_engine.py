@@ -47,6 +47,8 @@ from core.orderflow_config import (
     OF_SYMBOL,
     OF_ZSCORE_MIN_SIZE,
     OF_ZSCORE_THRESHOLD,
+    OF_ZSCORE_THRESHOLD_FRAC,
+    zscore_ceiling,
 )
 
 __all__ = [
@@ -110,6 +112,7 @@ class OrderFlowEngine:
         self.last_price = None
         self.absorb_bins = {}
         self.zscore_threshold = OF_ZSCORE_THRESHOLD
+        self.zscore_threshold_frac = OF_ZSCORE_THRESHOLD_FRAC
         self.zscore_min_size = OF_ZSCORE_MIN_SIZE
         self.ema_window = OF_EMA_WINDOW
         self.absorb_trades = OF_ABSORB_TRADES
@@ -131,14 +134,26 @@ class OrderFlowEngine:
                         absorb_vol_min=None, absorb_range_ratio=None,
                         absorb_delta_ratio=None):
         with self._lock:
+            # El umbral se expresa como fracción del techo `zscore_ceiling`, así
+            # que la ventana se procesa ANTES que el umbral absoluto: al cambiar
+            # `ema_window` hay que recomputarlo o el detector queda con el techo
+            # por debajo del umbral (apagado, y sin que nadie lo note).
+            if ema_window is not None:
+                self.ema_window = int(max(2, min(ema_window, 5000)))
+                self.zscore_threshold = (
+                    self.zscore_threshold_frac * zscore_ceiling(self.ema_window)
+                )
             if zscore_threshold is not None:
+                # Un umbral absoluto explícito gana, y su fracción se rederiva
+                # para que un cambio posterior de ventana no lo pierda.
                 self.zscore_threshold = round(max(0.1, float(zscore_threshold)), 2)
+                self.zscore_threshold_frac = (
+                    self.zscore_threshold / zscore_ceiling(self.ema_window)
+                )
             if absorb_trades is not None:
                 self.absorb_trades = int(max(20, min(absorb_trades, 300)))
             if zscore_min_size is not None:
                 self.zscore_min_size = int(max(0, min(zscore_min_size, 1000)))
-            if ema_window is not None:
-                self.ema_window = int(max(2, min(ema_window, 5000)))
             if absorb_vol_min is not None:
                 self.absorb_vol_min = float(absorb_vol_min)
             if absorb_range_ratio is not None:
@@ -150,6 +165,7 @@ class OrderFlowEngine:
     def settings_locked(self):
         return {
             "zscore_threshold": self.zscore_threshold,
+            "zscore_threshold_frac": self.zscore_threshold_frac,
             "zscore_min_size": self.zscore_min_size,
             "ema_window": self.ema_window,
             "absorb_trades": self.absorb_trades,
@@ -336,7 +352,7 @@ class OrderFlowEngine:
                 "sell_vol": round(self.sell_vol, 2),
             }
             if is_spike and new_episode:
-                payload["alert"] = f"Spike institucional detectado (Z {zscore:.2f}, {size} lotes)"
+                payload["alert"] = f"Spike institucional detectado (Z {zscore:.2f}, {size} contratos)"
                 self.alerts.append({
                     # UTC: la serie de este feed son epochs UTC, y estos alerts
                     # se leen junto a las velas del gráfico, que ya son UTC.
