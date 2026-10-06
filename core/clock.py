@@ -74,14 +74,33 @@ def to_utc(dt: Optional[datetime]) -> Optional[datetime]:
     return dt.astimezone(UTC)
 
 
+def from_epoch(value: Any) -> Optional[datetime]:
+    """Epoch en segundos -> datetime UTC aware.
+
+    Existe porque MT5 habla en epoch (`deal.time`, `candle.time`) y `to_utc()` solo
+    acepta datetimes. Pasar un epoch a `to_utc()` no avisa: revienta con
+    `AttributeError: 'int' object has no attribute 'tzinfo'` tres capas más allá, en
+    el endpoint, donde ya no se sabe de dónde salió el entero.
+
+    Devuelve `None` para `None` y para un valor no convertible, para que el llamante
+    pueda distinguir "sin fecha" de "con fecha cero".
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return to_utc(value)
+    try:
+        return datetime.fromtimestamp(float(value), tz=UTC)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
 def parse_iso(value: Any) -> Optional[datetime]:
     """ISO 8601 -> datetime UTC aware. Tolera 'Z', naive (asumido UTC) y None."""
     if value is None or value == "":
         return None
-    if isinstance(value, datetime):
-        return to_utc(value)
-    if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(float(value), tz=UTC)
+    if isinstance(value, (datetime, int, float)):
+        return from_epoch(value)
     text = str(value).strip()
     if not text:
         return None
