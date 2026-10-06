@@ -168,6 +168,83 @@ class TestEventBars:
         assert out["bars"]
 
 
+class TestVolumeProfile:
+    """El perfil reparte el volumen real de las velas: no simula ticks."""
+
+    def test_estructura(self):
+        out = market_view.volume_profile(_candles(), bins=24)
+
+        assert out["source"] == "bars"
+        assert out["bins"] == 24
+        assert len(out["profile"]) == 24
+        assert {"price", "vol"} <= set(out["profile"][0])
+        assert out["poc"] > 0 and out["val"] <= out["poc"] <= out["vah"]
+
+    def test_el_volumen_no_se_pierde(self):
+        """La suma de los bins es la suma del volumen de las velas.
+
+        Es el invariante que distingue un perfil MEDIDO de uno dibujado: si al
+        repartir se cae volumen, el POC se mueve con el volumen que desaparecio.
+        La tolerancia es la del redondeo a dos decimales de cada bin, no una-.
+        """
+        velas = _candles(40)
+        out = market_view.volume_profile(velas, bins=32)
+
+        esperado = sum(c["volume"] for c in velas)
+        assert out["total_volume"] == pytest.approx(esperado, rel=1e-9)
+        assert sum(b["vol"] for b in out["profile"]) == pytest.approx(esperado, abs=0.005 * 32)
+
+    def test_una_vela_estrecha_marca_el_poc(self):
+        """Con velas de un solo bin, el POC es el precio de la que mas volumen tuvo.
+
+        Se usan velas ESTRECHAS a proposito: una vela ancha reparte su volumen entre
+        muchos bins y el POC deja de ser su precio, que es el comportamiento correcto
+        (su volumen esta repartido por donde no se sabe) pero no lo que prueba esta
+        asercion.
+        """
+        velas = []
+        for i in range(30):
+            p = 1.0900 + i * 0.0010
+            velas.append({"time": i, "open": p, "high": p + 0.00002, "low": p - 0.00002,
+                          "close": p, "volume": 10.0})
+        velas[17]["volume"] = 5000.0
+
+        out = market_view.volume_profile(velas, bins=30)
+
+        assert out["poc"] == pytest.approx(1.0900 + 17 * 0.0010, abs=0.0002)
+
+    def test_el_valor_crece_con_el_porcentaje(self):
+        velas = _candles(60)
+
+        estrecho = market_view.volume_profile(velas, bins=48, poc_pct=30.0)
+        ancho = market_view.volume_profile(velas, bins=48, poc_pct=95.0)
+
+        assert (ancho["vah"] - ancho["val"]) > (estrecho["vah"] - estrecho["val"])
+
+    def test_velas_a_un_solo_precio_dan_un_bin(self):
+        out = market_view.volume_profile([_flat_candle(), _flat_candle()], bins=16)
+
+        assert out["bins"] == 1
+        assert out["total_volume"] == 100.0
+        assert out["val"] < out["poc"] < out["vah"]
+
+    def test_sin_velas_es_value_error(self):
+        with pytest.raises(ValueError):
+            market_view.volume_profile([])
+
+    def test_sin_volumen_es_value_error(self):
+        """Un perfil de volumen cero no se inventa: es un 400 con el motivo."""
+        velas = _candles(10)
+        for c in velas:
+            c["volume"] = 0.0
+
+        with pytest.raises(ValueError):
+            market_view.volume_profile(velas)
+
+    def test_bins_se_acotan_por_abajo(self):
+        assert market_view.volume_profile(_candles(), bins=1)["bins"] == 2
+
+
 class TestHelpers:
     def test_price_step_scale(self):
         assert market_view._price_step(0.5) == 0.00001

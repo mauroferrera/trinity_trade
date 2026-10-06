@@ -58,7 +58,14 @@ def footprint(candles: List[dict], max_bars: int = 150, bid_ratio: float = 0.6,
     - `bid`: volumen en el lado bid (agresores vendedores).
     - `ask`: volumen en el lado ask (agresores compradores).
     - `delta` = ask - bid por nivel.
+
+    `bid_ratio` se valida porque se llama desde una query string: un 5.0 no es "mucho
+    sesgo comprador", es un número que no existe, y repartiendo el volumen con él el
+    gráfico sale con la mitad del volumen en un lado sin decir por qué. Aqui sale un
+    `ValueError`, que la API traduce a 400.
     """
+    if not 0.0 <= float(bid_ratio) <= 1.0:
+        raise ValueError("bid_ratio fuera de rango: {0!r} (se espera 0..1)".format(bid_ratio))
     if not candles:
         return None
     sel = candles[-max_bars:]
@@ -327,3 +334,115 @@ def event_bars(candles: List[dict], bar_type: str = "volbar", param: int = 500,
     return {"source": "synthetic", "mode": "eventbars", "bar_type": mode.lower(),
             "param": int(param), "step": _price_step(ticks[-1]["price"]),
             "bars": bars}
+
+
+# ------------------------------------------------------------- volume profile
+
+def volume_profile(candles: List[dict], bins: int = 48, poc_pct: float = 70.0) -> dict:
+    """Volume Profile de sesion: donde se traded el precio, no solo por donde paso.
+
+    Es la unica vista de este modulo que NO es sintetica en su forma: no simula ticks,
+    reparte el volumen REAL de cada vela entre los bins que su rango toca, en
+    proporcion al solape. La razon de la distincion es que un POC inventado con
+    forma triangular (que es lo que haria `_simulate_ticks`) se parece a un POC
+    medido en el dibujo y no en el numero, que es lo que el usuario mira para poner
+    una orden.
+
+    Reparto, en dos pasos y sin perder un solo tick:
+
+    1. Cada vela aporta su `volume` repartido entre los bins que solapan su
+       `[low, high]`, a prorrata del ancho del solape. Los ticks que caen fuera del
+       rango global se quedan en el bin del extremo (una vela no aporta a ningun
+       lado si su rango entero esta fuera, y eso no ocurre porque el rango global se
+       construye con sus highs y lows). DENTRO de la vela el reparto es UNIFORME, y
+       es una limitacion declarada: OHLCV no dice en que precio se transacto dentro
+       del rango, y cualquier forma (triangular hacia el cierre, como
+       `_simulate_ticks`) seria una suposicion pintada de medida. Lo que no se
+       inventa es el total: la suma de los bins es la suma del volumen.
+    2. El POC es el bin con mas volumen; el valor (VAH/VAL) se abre desde el POC
+       tomando, en cada paso, el vecino con mas volumen hasta juntar `poc_pct` del
+       total. Abrir por el vecino mas gordo y no simetricamente es lo que evita un
+       valor artificialmente centrado en el POC cuando el volumen esta en un lado.
+
+    Devuelve `{bins, profile, poc, vah, val, source, total_volume}`. `profile` lleva
+    el precio CENTRAL de cada bin, que es lo que el JS pinta como barra.
+    """
+    if not candles:
+        raise ValueError("volume_profile necesita velas")
+    n_bins = max(2, int(bins))
+    objetivo = _clamp(float(poc_pct), 1.0, 100.0)
+
+    lows = [float(c["low"]) for c in candles]
+    highs = [float(c["high"]) for c in candles]
+    piso, techo = min(lows), max(highs)
+    if not techo > piso:
+        # Todas las velas al mismo precio: hay un precio y ningun rango. Un perfil
+        # de un bin con el precio clavado es informacion, no un error.
+        paso = _price_step(piso)
+        total = sum(float(c.get("volume") or 0.0) for c in candles)
+        return {
+            "bins": 1,
+            "profile": [{"price": _r(piso, 5), "vol": round(total, 2)}],
+            "poc": _r(piso, 5),
+            "vah": _r(piso + paso, 5),
+            "val": _r(piso - paso, 5),
+            "source": "bars",
+            "total_volume": round(total, 2),
+        }
+
+    ancho = (techo - piso) / n_bins
+    vols = [0.0] * n_bins
+    for c in candles:
+        vol = float(c.get("volume") or 0.0)
+        if vol <= 0:
+            continue
+        bajo, alto = float(c["low"]), float(c["high"])
+        primero = max(0, min(n_bins - 1, int((bajo - piso) / ancho)))
+        ultimo = max(0, min(n_bins - 1, int((alto - piso) / ancho)))
+        solapes = []
+        total_solape = 0.0
+        for i in range(primero, ultimo + 1):
+            base = piso + i * ancho
+            s = min(alto, base + ancho) - max(bajo, base)
+            if s > 0:
+                solapes.append((i, s))
+                total_solape += s
+        if total_solape <= 0:
+            # Rango degenerado (high == low cae en un bin por el redondeo del int):
+            # todo el volumen a ese bin, que es donde se transacto.
+            vols[primero] += vol
+            continue
+        for i, s in solapes:
+            vols[i] += vol * (s / total_solape)
+
+    total = sum(vols)
+    if total <= 0:
+        raise ValueError("las velas no traen volumen: no hay profile que dibujar")
+
+    i_poc = max(range(n_bins), key=lambda i: vols[i])
+    objetivo_vol = total * objetivo / 100.0
+    acumulado = vols[i_poc]
+    arriba, abajo = i_poc, i_poc
+    while acumulado < objetivo_vol and (arriba < n_bins - 1 or abajo > 0):
+        vol_arriba = vols[arriba + 1] if arriba < n_bins - 1 else -1.0
+        vol_abajo = vols[abajo - 1] if abajo > 0 else -1.0
+        if vol_arriba >= vol_abajo:
+            arriba += 1
+            acumulado += vol_arriba
+        else:
+            abajo -= 1
+            acumulado += vol_abajo
+
+    perfil = [
+        {"price": _r(piso + (i + 0.5) * ancho, 5), "vol": round(vols[i], 2)}
+        for i in range(n_bins)
+    ]
+    return {
+        "bins": n_bins,
+        "profile": perfil,
+        "poc": perfil[i_poc]["price"],
+        "vah": _r(piso + (arriba + 1) * ancho, 5),
+        "val": _r(piso + abajo * ancho, 5),
+        "source": "bars",
+        "total_volume": round(total, 2),
+    }
