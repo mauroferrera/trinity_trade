@@ -20,6 +20,7 @@ from adapters.base_adapter import (
     SymbolSpec,
     TerminalUnavailable,
     TIMEFRAMES,
+    filas_o_vacias,
     normalize_candle,
     normalize_ohlc,
     normalize_symbol,
@@ -171,6 +172,41 @@ class TestNormalizacionDeVelas:
     def test_normalize_ohlc_soporta_lista_vacia(self):
         assert normalize_ohlc([]) == []
         assert normalize_ohlc(None) == []
+
+    def test_normalize_ohlc_acepta_el_array_numpy_que_devuelve_mt5(self):
+        """La capa base también era partícipe del bug, no solo el adaptador.
+
+        `normalize_ohlc()` hacía `for r in rows or []`, y un numpy array de más de
+        un elemento no admite la pregunta por su verdad: lanza `ValueError`. Como
+        el array se indexa por posición igual que una tupla, la fila se normaliza
+        sin tocar nada; lo único que hay que cambiar es la comprobación.
+        """
+        numpy = pytest.importorskip("numpy")
+        filas = numpy.array(
+            [
+                (1_700_000_000, 1.1000, 1.1010, 1.0990, 1.1005, 42, 0, 0),
+                (1_700_000_900, 1.1005, 1.1020, 1.1000, 1.1015, 43, 0, 0),
+            ],
+            dtype=float,
+        )
+        velas = normalize_ohlc(filas)
+        assert len(velas) == 2
+        assert velas[0] == {
+            "time": 1_700_000_000,
+            "open": 1.1000,
+            "high": 1.1010,
+            "low": 1.0990,
+            "close": 1.1005,
+            "volume": 42,
+        }
+
+    def test_filas_o_vacias_no_pregunta_por_la_verdad_de_un_array(self):
+        """La regla, en una línea: `None` se vacía, un array se devuelve tal cual."""
+        numpy = pytest.importorskip("numpy")
+        array = numpy.array([1.0, 2.0, 3.0])
+        assert filas_o_vacias(None) == []
+        assert filas_o_vacias(array) is array
+        assert filas_o_vacias([]) == []
 
     def test_el_tiempo_se_devuelve_como_entero(self):
         """Un float en la clave `time` rompe el eje del gráfico más adelante.

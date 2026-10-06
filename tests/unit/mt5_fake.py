@@ -15,6 +15,10 @@ necesitan comprobar:
   - Que normaliza bien lo que MT5 devuelve (que es un namedtuple POSICIONAL).
   - Que un fallo del bróker sale como `AdapterError` y no como una excepción
     cruda de la librería.
+  - Que el puerto de EJECUCIÓN ve la forma real: `order_send` devuelve un objeto
+    con atributos o `None` (que es una ausencia de respuesta, no un rechazo),
+    `positions_get` devuelve objetos de posición, y los valores del enum
+    (`ORDER_FILLING_FOK` = 0, no 1) son los del paquete instalado.
 
 La última es la que más importa. Si el adaptador deja que un
 `copy_rates_from_pos` devuelva `None` sin comprobarlo, el llamante recibe un
@@ -108,6 +112,8 @@ class FakeSymbolInfoTrade:
         volume_min: float = 0.01,
         volume_max: float = 100.0,
         volume_step: float = 0.01,
+        filling_mode: int = 1,
+        trade_mode: int = 4,
     ) -> None:
         self.symbol = symbol
         self.trade_contract_size = float(trade_contract_size)
@@ -116,6 +122,79 @@ class FakeSymbolInfoTrade:
         self.volume_min = float(volume_min)
         self.volume_max = float(volume_max)
         self.volume_step = float(volume_step)
+        # `filling_mode` es la MASCARA (bit 1=FOK, bit 2=IOC), no el enum. El
+        # default 1 es lo que publica EURUSD en MetaQuotes-Demo, comprobado
+        # contra el bróker real: solo FOK. Poner 3 (FOK+IOC) como default haría
+        # que todos los tests de envíoMapperan el camino del ciclo IOC, que es
+        # justamente el que no ocurre en EURUSD.
+        self.filling_mode = int(filling_mode)
+        self.trade_mode = int(trade_mode)
+
+
+class FakeTradeResult:
+    """`MqlTradeResult` de `order_send`.
+
+    Es un objeto con ATRIBUTOS, no un dict, y sus atributos existen aunque el envío
+    haya fallado. Es la forma real y es la que hace que un `result["retcode"]` en
+    el puerto reviente con TypeError en producción y pase el test con un doble que
+    sí fuera dict.
+
+    `None` se modela en `order_send` devolviendo None, no con un flag aquí: que el
+    bróker no conteste y que conteste con un retcode son dos hechos distintos.
+    """
+
+    def __init__(
+        self,
+        retcode: int = 10009,
+        deal: Optional[int] = None,
+        order: Optional[int] = None,
+        price: float = 0.0,
+        comment: str = "",
+        retcode_external: int = 0,
+    ) -> None:
+        self.retcode = int(retcode)
+        self.deal = deal
+        self.order = order
+        self.price = float(price)
+        self.comment = str(comment)
+        self.retcode_external = int(retcode_external)
+        self.request_id = 0
+        self.type = 0
+        self.type_filling = 0
+        self.volume = 0.0
+        self.symbol = ""
+
+
+class FakePosition:
+    """Posición abierta de MT5 (`positions_get` devuelve estos objetos)."""
+
+    def __init__(
+        self,
+        ticket: int,
+        symbol: str,
+        type: int = 0,
+        volume: float = 0.1,
+        price_open: float = 0.0,
+        price_current: float = 0.0,
+        sl: float = 0.0,
+        tp: float = 0.0,
+        profit: float = 0.0,
+        magic: int = 0,
+        comment: str = "",
+    ) -> None:
+        self.ticket = int(ticket)
+        self.symbol = str(symbol)
+        self.type = int(type)
+        self.volume = float(volume)
+        self.price_open = float(price_open)
+        self.price_current = float(price_current)
+        self.sl = float(sl)
+        self.tp = float(tp)
+        self.profit = float(profit)
+        self.swap = 0.0
+        self.magic = int(magic)
+        self.comment = str(comment)
+        self.time = 0
 
 
 class FakeMT5(types.ModuleType):
@@ -133,6 +212,22 @@ class FakeMT5(types.ModuleType):
         self.TIMEFRAME_W1 = TIMEFRAME_W1
         self.COPY_TICKS_ALL = COPY_TICKS_ALL
 
+        # Constantes del enum, con los valores REALES del paquete (verificados
+        # contra el bróker: ORDER_FILLING_FOK=0, no 1). El puerto las tiene como
+        # literales para poder importarse sin el paquete, y este test compara
+        # ambos juegos para que la divergencia no pueda colarse.
+        self.ORDER_TYPE_BUY = 0
+        self.ORDER_TYPE_SELL = 1
+        self.TRADE_ACTION_DEAL = 1
+        self.ORDER_TIME_GTC = 0
+        self.ORDER_FILLING_FOK = 0
+        self.ORDER_FILLING_IOC = 1
+        self.TRADE_RETCODE_DONE = 10009
+        self.TRADE_RETCODE_PLACED = 10008
+        self.TRADE_RETCODE_INVALID_FILL = 10030
+        self.POSITION_TYPE_BUY = 0
+        self.POSITION_TYPE_SELL = 1
+
         # Estado: lo que el test configura.
         self.initialize_ok = True
         self.last_error_value = 0
@@ -141,8 +236,22 @@ class FakeMT5(types.ModuleType):
         self.trade_by_symbol: Dict[str, Any] = {}
         self.rates_by_key: Dict[Any, List[Any]] = {}
         self.ticks_by_symbol: Dict[str, List[Any]] = {}
+        self.ticks_as_numpy: Dict[str, bool] = {}
         self.tick_by_symbol: Dict[str, Any] = {}
         self.terminal_common_path = "/fake/common"
+
+        # -- ejecución --------------------------------------------------------
+        #: Qué devuelve `order_send`. `None` = el bróker no contesta (que es un
+        #: hecho, no un rechazo). Lista = una respuesta por intento, para poder
+        #: programar "FOK falla con 10030 y luego IOC funciona".
+        self.order_send_results: Any = None
+        #: Peticiones recibidas, en orden, tal cual se mandaron.
+        self.orders_sent: List[Dict[str, Any]] = []
+        #: Posiciones abiertas que devuelve `positions_get`.
+        self.positions: List[Any] = []
+        #: Valor de `order_calc_profit`. None = el bróker no lo publica.
+        self.calc_profit_value: Optional[float] = None
+        self.calc_profit_calls: List[tuple] = []
 
         # Registro de llamadas: para afirmar QUÉ se pidió y con qué args.
         self.calls: List[tuple] = []
@@ -200,7 +309,19 @@ class FakeMT5(types.ModuleType):
 
     def symbols_get(self, group: Optional[str] = None):
         self.calls.append(("symbols_get", group))
-        return tuple(self.symbols_list)
+        if group is None or group == "*":
+            return tuple(self.symbols_list)
+        # El grupo de la API real es un patrón de Market Watch: un nombre exacto o
+        # un glob con `*`. NO es sintaxis de MQL5, así que `\*` no coincide con nada
+        # y la llamada devuelve una lista vacía SIN error.
+        #
+        # El doble respetaba el grupo pero lo ignoraba, y por eso un `\*` equivocado
+        # en el adaptador daba verde en toda la suite mientras en el bróker real
+        # `/api/symbols` salía `[]`: un doble más permisivo que la realidad es peor
+        # que no tener doble, porque certifica como bueno un código que no funciona.
+        import fnmatch
+
+        return tuple(s for s in self.symbols_list if fnmatch.fnmatchcase(s, group))
 
     def symbol_select(self, symbol: str, visible: bool = True) -> bool:
         self.calls.append(("symbol_select", symbol, visible))
@@ -213,6 +334,49 @@ class FakeMT5(types.ModuleType):
     def symbol_info_trade(self, symbol: str):
         self.calls.append(("symbol_info_trade", symbol))
         return self.trade_by_symbol.get(symbol)
+
+    # -- ejecución ------------------------------------------------------------
+
+    def order_send(self, request: Dict[str, Any]):
+        """`order_send`: guarda la petición y devuelve la respuesta programada.
+
+        `order_send_results` puede ser:
+        - `None`  -> se devuelve None, como un bróker que no contesta.
+        - un objeto `FakeTradeResult` -> la misma respuesta para todos los intentos.
+        - una lista -> una respuesta por intento; al agotarse se repite la última,
+          porque un ciclo FOK->IOC son exactamente dos intentos y un test que
+          programa tres respuestas no está probando un caso real.
+        """
+        self.calls.append(("order_send", dict(request or {})))
+        self.orders_sent.append(dict(request or {}))
+        programmed = self.order_send_results
+        if isinstance(programmed, list):
+            if not programmed:
+                return None
+            if len(self.orders_sent) <= len(programmed):
+                return programmed[len(self.orders_sent) - 1]
+            return programmed[-1]
+        return programmed
+
+    def order_calc_profit(self, symbol: str, volume: float,
+                          entry: float, exit_price: float):
+        self.calls.append(("order_calc_profit", symbol, volume, entry, exit_price))
+        self.calc_profit_calls.append((symbol, volume, entry, exit_price))
+        return self.calc_profit_value
+
+    def positions_get(self, symbol: Optional[str] = None, ticket: Optional[int] = None):
+        """`positions_get` por ticket y por símbolo, como el real.
+
+        Por TICKET no acepta símbolo: el bróker ignora el resto de filtros cuando
+        se pasa `ticket`, y un doble que exigiera los dos a la vez no dejaría
+        probar el cierre real.
+        """
+        self.calls.append(("positions_get", symbol, ticket))
+        if ticket is not None:
+            return tuple(p for p in self.positions if int(p.ticket) == int(ticket))
+        if symbol is not None:
+            return tuple(p for p in self.positions if p.symbol == symbol)
+        return tuple(self.positions)
 
     def symbol_info_tick(self, symbol: str):
         self.calls.append(("symbol_info_tick", symbol))
@@ -228,22 +392,48 @@ class FakeMT5(types.ModuleType):
         self.calls.append(("copy_rates_range", symbol, frm, to, timeframe))
         return self.rates_by_key.get((symbol, timeframe))
 
+    def _ticks(self, symbol: str) -> Any:
+        filas = [_as_tick_row(t) for t in self.ticks_by_symbol.get(symbol, [])]
+        return _como_array(filas) if self.ticks_as_numpy.get(symbol) else filas
+
     def copy_ticks_range(self, symbol: str, frm: int, to: int, flags: int = COPY_TICKS_ALL):
         self.calls.append(("copy_ticks_range", symbol, frm, to, flags))
-        return [_as_tick_row(t) for t in self.ticks_by_symbol.get(symbol, [])]
+        return self._ticks(symbol)
 
     def copy_ticks_from(self, symbol: str, date_from: float, count: int, flags: int = COPY_TICKS_ALL):
         self.calls.append(("copy_ticks_from", symbol, date_from, count, flags))
-        return [_as_tick_row(t) for t in self.ticks_by_symbol.get(symbol, [])]
+        return self._ticks(symbol)
 
     # -- configuración desde el test -------------------------------------------
 
-    def set_rates(self, symbol: str, timeframe: int, rows: Sequence[Sequence[Any]]) -> None:
-        """Qué debe devolver `copy_rates_from_pos` para (symbol, timeframe)."""
-        self.rates_by_key[(symbol, timeframe)] = list(rows)
+    def set_rates(
+        self,
+        symbol: str,
+        timeframe: int,
+        rows: Sequence[Sequence[Any]],
+        as_numpy: bool = False,
+    ) -> None:
+        """Qué debe devolver `copy_rates_from_pos` para (symbol, timeframe).
 
-    def set_ticks(self, symbol: str, ticks: Sequence[FakeTick]) -> None:
+        `as_numpy=True` devuelve un array numpy, que es lo que hace el paquete
+        real. Por defecto son listas, y esa diferencia no es menor: la verdad de
+        un numpy array de más de un elemento lanza `ValueError`, así que un doble
+        que devuelve listas deja en verde un `rows or []` que en el bróker real
+        tumba TODA lectura de velas.
+        """
+        filas = list(rows)
+        self.rates_by_key[(symbol, timeframe)] = _como_array(filas) if as_numpy else filas
+
+    def set_ticks(self, symbol: str, ticks: Sequence[FakeTick], as_numpy: bool = False) -> None:
+        """Los ticks se guardan como los da el test y se convierten al servirlos.
+
+        Convertirlos aquí y volver a convertirlos en `copy_ticks_range` los
+        aplastaba dos veces: `getattr(tuple, "time", 0)` sobre una tupla ya
+        normalizada da 0 para todo, y todos los trades salían con precio y
+        volumen cero.
+        """
         self.ticks_by_symbol[symbol] = list(ticks)
+        self.ticks_as_numpy[symbol] = bool(as_numpy)
 
     def calls_named(self, name: str) -> List[tuple]:
         """Llamadas registradas con ese nombre."""
@@ -251,6 +441,18 @@ class FakeMT5(types.ModuleType):
 
     def called(self, name: str) -> bool:
         return bool(self.calls_named(name))
+
+
+def _como_array(filas: Sequence[Sequence[Any]]) -> Any:
+    """Filas posicionales -> array numpy 2D, como el que devuelve el paquete.
+
+    Se indexa por posición igual que una tupla (`row[0]` es el tiempo), que es lo
+    único que necesita `normalize_candle()`. Se importa aquí y no arriba para que
+    este módulo siga importándose en un entorno sin numpy.
+    """
+    import numpy
+
+    return numpy.array([tuple(f) for f in filas], dtype=float)
 
 
 def _as_tick_row(tick: Any) -> tuple:

@@ -46,6 +46,7 @@ from adapters.base_adapter import (
     SymbolSpec,
     TerminalUnavailable,
     TIMEFRAMES,
+    filas_o_vacias,
     normalize_ohlc,
     normalize_symbol,
     normalize_trade,
@@ -300,7 +301,7 @@ class MT5ForexAdapter:
                     "'.a' o '_m') y que esté en la lista de símbolos."
                 )
             rows = mt5.copy_rates_from_pos(simbolo, tf, 0, n)
-            if not rows:
+            if rows is None:
                 return []
             return normalize_ohlc(rows)
 
@@ -323,8 +324,8 @@ class MT5ForexAdapter:
         def _get(mt5):
             if not mt5.symbol_select(simbolo, True):
                 raise SymbolNotFound(f"El bróker no publica {simbolo}.")
-            intraday = mt5.copy_rates_from_pos(simbolo, tf, 0, n) or []
-            daily = mt5.copy_rates_from_pos(simbolo, d1, 0, 3) or []
+            intraday = filas_o_vacias(mt5.copy_rates_from_pos(simbolo, tf, 0, n))
+            daily = filas_o_vacias(mt5.copy_rates_from_pos(simbolo, d1, 0, 3))
             return normalize_ohlc(intraday), normalize_ohlc(daily)
 
         return self._session.call(_get)
@@ -347,8 +348,8 @@ class MT5ForexAdapter:
             # que el bróker no define igual en todas las versiones del paquete.
             desde = int(since_ts or 0)
             ahora = int(time.time())
-            rows = mt5.copy_ticks_range(simbolo, desde, ahora, COPY_TICKS_ALL) or []
-            return [normalize_trade(r) for r in reversed(rows)]
+            rows = filas_o_vacias(mt5.copy_ticks_range(simbolo, desde, ahora, COPY_TICKS_ALL))
+            return [normalize_trade(r) for r in reversed(list(rows))]
 
         return self._session.call(_get)
 
@@ -379,9 +380,16 @@ class MT5ForexAdapter:
         `symbols_get()` devuelve TODOS los del bróker (miles). Se filtran los
         que no están visibles: para un símbolo con `visible=False`, `symbol_info`
         devuelve None, así que ofrecerlo sería ofrecer algo que no funciona.
+
+        El patrón del grupo es `"*"` y NO `"\\*\\*\\*"`: los escapes con barra
+        invertida son sintaxis de MQL5 y en la API de Python no coinciden con
+        nada, así que `symbols_get` devuelve una lista vacía sin error. El
+        síntoma era `/api/symbols` con `[]` mientras el bróker publicaba
+        12.335 símbolos: el selector del frontend vacío y el resto de la app
+        leyendo EURUSD sin problema, porque cada ruta pide su símbolo a mano.
         """
         def _get(mt5) -> List[str]:
-            grupo = mt5.symbols_get(group="\\*\\*\\*") or ()
+            grupo = mt5.symbols_get(group="*") or ()
             return sorted(s.name for s in grupo if getattr(s, "visible", False))
 
         return self._session.call(_get)

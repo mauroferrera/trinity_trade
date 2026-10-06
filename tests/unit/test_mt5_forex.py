@@ -290,6 +290,37 @@ class TestAperturaDeSesion:
 
 
 class TestVelas:
+    def test_lee_velas_cuando_el_broker_devuelve_un_array_numpy(self, adp, mt5):
+        """El paquete real devuelve un numpy array, y el adaptador lo tiene que leer.
+
+        Este es el test que faltaba y que hacia pasar por verde una lectura de
+        velas IMPOSIBLE en produccion: `rows or []` y `if not rows` no se pueden
+        usar con un numpy array de mas de un elemento, lanzan `ValueError: The
+        truth value of an array with more than one element is ambiguous`. O sea
+        que toda vela de EURUSD devolvia un error, mientras el resto de la app
+        parecia funcionar porque cada ruta pide su simbolo a mano.
+
+        El doble devolvia listas, donde preguntar por la verdad es inocuo. Un
+        doble que devuelve el tipo facil no es un atajo: es un sitio donde el
+        error real no se ve.
+        """
+        mt5.set_rates("EURUSD", TIMEFRAMES["M15"], rates_fixture(30), as_numpy=True)
+        velas = adp.ohlc("EURUSD", "M15", 30)
+        assert len(velas) == 30
+        assert set(velas[0]) == {"time", "open", "high", "low", "close", "volume"}
+
+    def test_ohlc_con_daily_igualmente_cuando_viene_numpy(self, adp, mt5):
+        """`ohlc_with_daily` hacia el mismo `or []` en las DOS lecturas."""
+        mt5.set_rates("EURUSD", TIMEFRAMES["M15"], rates_fixture(30), as_numpy=True)
+        mt5.set_rates("EURUSD", TIMEFRAMES["D1"], rates_fixture(3), as_numpy=True)
+        intraday, daily = adp.ohlc_with_daily("EURUSD", "M15", 30)
+        assert len(intraday) == 30
+        assert len(daily) == 3
+
+    def test_un_broker_sin_velas_devuelve_lista_vacia_y_no_none(self, adp, mt5):
+        """`None` del broker es "no hay velas", y sigue siendo una lista vacia."""
+        assert adp.ohlc("EURUSD", "M15", 30) == []
+
     def test_pide_las_velas_al_brroker_con_los_argumentos_correctos(self, adp, mt5):
         mt5.set_rates("EURUSD", TIMEFRAMES["M15"], rates_fixture(30))
         adp.ohlc("EURUSD", "M15", 30)
@@ -406,6 +437,25 @@ class TestVelas:
 
 
 class TestTrades:
+    def test_lee_trades_cuando_llegan_como_array_numpy(self, adp, mt5):
+        """`copy_ticks_range` también devuelve numpy: el mismo `or []` reventaba.
+
+        Y el `reversed(rows)` de un numpy array hay que hacerlo sobre una lista:
+        numpy no admite `reversed()` sobre un array de más de una dimensión.
+        """
+        mt5.set_ticks(
+            "EURUSD",
+            [
+                FakeTick(1_700_000_300, 1.1001, 1.1002, 1.1002, 5),
+                FakeTick(1_700_000_200, 1.1001, 1.1002, 1.1002, 4),
+                FakeTick(1_700_000_100, 1.1001, 1.1002, 1.1002, 3),
+            ],
+            as_numpy=True,
+        )
+        trades = adp.trades("EURUSD")
+        assert [t["ts"] for t in trades] == [1_700_000_100, 1_700_000_200, 1_700_000_300]
+        assert [t["size"] for t in trades] == [3, 4, 5]
+
     def test_los_trades_llegan_en_orden_ascendente(self, adp, mt5):
         """MT5 los devuelve al revés. Invertir es lo que hace falta.
 
@@ -484,6 +534,35 @@ class TestPrecioYSimbolos:
     def test_sin_simbolos_devuelve_lista_vacia(self, adp, mt5):
         mt5.symbols_list = []
         assert adp.symbols() == []
+
+    def test_pide_los_simbolos_con_el_grupo_que_entende_la_api(self, adp, mt5):
+        """El grupo tiene que ser `"*"`, no una máscara de MQL5.
+
+        `symbols_get(group="\\*\\*\\*")` devuelve una lista vacía sin error en el
+        bróker real: los escapes con barra invertida son sintaxis de MQL5 y la API
+        de Python no los entiende. El síntoma era `/api/symbols` con `[]` mientras
+        el bróker publicaba 12.335 símbolos, con el resto de la app leyendo EURUSD
+        sin problema porque cada ruta pide su símbolo a mano.
+        """
+        adp.symbols()
+
+        pedidos = [c for c in mt5.calls if c[0] == "symbols_get"]
+        assert pedidos, "no se pidió la lista de símbolos"
+        for llamada in pedidos:
+            assert llamada[1] in (None, "*"), llamada
+
+    def test_lista_vacia_del_broker_no_es_una_Lista_vacia_por_error_de_grupo(self, adp, mt5):
+        """Con un bróker que publica símbolos, la lista NO puede salir vacía.
+
+        Es la aserción que hace visible el fallo en la prueba más simple: si el
+        grupo enviado no coincide con nada, esto falla en vez de pasar en silencio.
+        """
+        mt5.symbols_list = [
+            FakeSymbolInfo("EURUSD"),
+            FakeSymbolInfo("GBPUSD"),
+            FakeSymbolInfo("XAUUSD"),
+        ]
+        assert adp.symbols() == ["EURUSD", "GBPUSD", "XAUUSD"]
 
 
 # ---------------------------------------------------------------------------

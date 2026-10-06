@@ -171,7 +171,17 @@ class SymbolSpec:
 
     @property
     def pip_quote(self) -> bool:
-        """True si la convención forex aplica (y "pips" es un término honesto)."""
+        """True si la convención forex aplica (y "pips" es un término honesto).
+
+        Un `pip_override` la descarta por definición: existe justamente para los
+        símbolos que NO cotizan como un par de forex (un minicontrato de dólar de
+        la B3 con 3 decimales, un CFD exótico). Si el bróker publica 3 decimales y
+        además fija la unidad a mano, llamar "pips" a esa unidad deshonesta al
+        símbolo, que es el mismo error que se corrigió para el oro: el número del
+        motivo de rechazo tiene que nombrarse como lo nombra el mercado.
+        """
+        if self.pip_override and self.pip_override > 0:
+            return False
         return int(self.digits) >= PIP_MIN_DIGITS
 
     @property
@@ -196,6 +206,24 @@ class SymbolSpec:
             # esconde que el número es una distancia en precio crudo.
             return f"{distance:g} en precio"
         return f"{n:.{decimals}f} {self.unit_label}"
+
+    def plan_levels(self, entry: Optional[float], direction: str,
+                    sl_distance: Optional[float],
+                    tp_ratio: float = 2.0) -> Dict[str, Optional[float]]:
+        """SL/TP a partir de la distancia ABSOLUTA de precio (sin pips por medio).
+
+        No calcula nada: delega en `core.setup_gate.plan_levels` pasando estos
+        dígitos. La aritmética vive en el núcleo para que se pueda probar sin
+        terminal, y el spec solo aporta lo que sabe —cómo redondear para que el nivel
+        cuadre con el tick—.
+
+        Devuelve `{"sl": None, "tp": None}` si no hay entry o la distancia no es
+        positiva. Quien llama decide qué hacer con un plan sin stop, y lo que hace el
+        gate es rechazarlo con un motivo, nunca rellenarlo.
+        """
+        from core.setup_gate import plan_levels  # noqa: PLC0415 - perezoso: adapters -> core
+
+        return plan_levels(entry, direction, sl_distance, tp_ratio, digits=int(self.digits))
 
     def format_distance(self, distance: float, decimals: int = 1) -> str:
         """Alias legible de `format_units` para los motivos de rechazo."""
@@ -311,9 +339,31 @@ def normalize_candle(row: Any) -> Dict[str, Any]:
     }
 
 
+def filas_o_vacias(rows: Any) -> Sequence[Any]:
+    """`None` -> lista vacía. Lo demás, tal cual. SIN preguntar por su verdad.
+
+    Existe por una trampa concreta: las funciones `copy_*` de MT5 devuelven un
+    array **numpy**, y la verdad de un numpy array de más de un elemento lanza
+    `ValueError: The truth value of an array with more than one element is
+    ambiguous`. Así que el idiom tan natural `rows or []` -y el igual de común
+    `if not rows`- no es "poco elegante": revienta, y solo cuando hay más de una
+    fila, que es el caso normal de una lectura de velas.
+
+    El síntoma era que cualquier lectura de velas devolvía `ValueError` en el
+    bróker de verdad, con toda la suite en verde, porque el doble de MT5 devuelve
+    listas y opcionalmente `None`: para una lista, la verdad es inocua. Un doble
+    que devuelve siempre el tipo fácil oculta justo el error que importa.
+
+    Se compara contra `None` y no se convierte aquí a propósito: `normalize_candle`
+    indexa las filas posicionalmente y un array se indexa sin problema, así que
+    hacer una copia no aporta nada y copia 60 velas en cada lectura.
+    """
+    return [] if rows is None else rows
+
+
 def normalize_ohlc(rows: Sequence[Any]) -> List[Dict[str, Any]]:
     """Lista de filas crudas -> lista de velas normalizadas."""
-    return [normalize_candle(r) for r in rows or []]
+    return [normalize_candle(r) for r in filas_o_vacias(rows)]
 
 
 def normalize_trade(row: Any) -> Dict[str, Any]:
