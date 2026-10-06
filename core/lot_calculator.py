@@ -33,6 +33,7 @@ __all__ = [
     "LotSpec",
     "MIN_LOT",
     "standard_forex_lots",
+    "risk_per_unit",
     "b3_mini_contracts",
     "b3_bonds",
     "crypto_notional_usdt",
@@ -161,6 +162,28 @@ def _risk_per_unit(sl_distance: float, spec: LotSpec, unidad: str) -> float:
             "stop no es colocable en ese instrumento. Revisa sl_distance y tick_size."
         )
     return risk
+
+
+def risk_per_unit(sl_distance: float, spec: LotSpec) -> float:
+    """Riesgo en divisa de la cuenta de UNA unidad al llegar al SL. Forex: un lote.
+
+    Existe con nombre público porque la pregunta la hacen dos sitios y tienen que
+    darexactamente la misma cifra: el que DIMENSIONA el lote y el que después
+    COMPRUEBA que ese lote cabe en el presupuesto de riesgo. Si los dos calcularan
+    el riesgo por su cuenta, una diferencia de un factor entre ambos no daría
+    ningún error: el lote se dimensionaría con una cuenta y se validaría con
+    otra, y ambos números saldrían redondos y con aspecto de razonables.
+
+    **El `tick_value` NO se multiplica por el `lot_size`.** En MT5,
+    `SYMBOL_TRADE_TICK_VALUE` ya es el dinero que mueve la cuenta por un tick de
+    UN lote: el tamaño del contrato ya está dentro. Multiplicarlo otra vez por
+    100.000 en EURUSD infla el riesgo del lote en cinco órdenes de magnitud, y el
+    síntoma es que toda operación se rechaza por "riesgo excede el presupuesto"
+    con cifras de millones cuando el presupuesto son decenas. El `lot_size` sigue
+    declarándose porque `LotSpec` lo valida y porque un spec sin contrato
+    declarado no es un spec de forex.
+    """
+    return _risk_per_unit(sl_distance, spec, "lote")
 
 
 def standard_forex_lots(risk_amount: float, sl_distance: float, spec: LotSpec) -> Dict[str, Any]:

@@ -87,6 +87,76 @@ class TestForexLots:
             lc.standard_forex_lots(100.0, 0.0012, spec)
 
 
+class TestRiskPerUnit:
+    """La función que la usa el ejecutor para contrastar el lote con el presupuesto.
+
+    Existe como nombre público porque la respuesta la necesitan DOS sitios —el que
+    dimensiona el lote y el que comprueba que ese lote cabe en el presupuesto— y
+    tienen que dar la misma cifra. Si uno calculara el riesgo por su cuenta, una
+    diferencia entre ambos no daría error: daría un lote dimensionado con una
+    cuenta y validado contra otra, con los dos números redondeados y con aspecto de
+    razonables.
+    """
+
+    def test_es_la_misma_cifra_que_devuelve_el_dimensionado(self):
+        """La coherencia, en forma de test: no basta con que cada una acierte.
+
+        Este es el invariante que importa. El ejecutor ataca `risk_per_unit` para
+        validar el presupuesto, y `_lote_por_riesgo` usa `standard_forex_lots` para
+        decidir el tamaño. Si divergieran en un factor, el gate de presupuesto
+        compararía la pérdida de un lote medido con una cuenta contra un lote
+        dimensionado con otra, y el fallo aparecería como un rechazo con un motivo
+        que no lleva a ninguna parte.
+        """
+        for sl in (0.0005, 0.0010, 0.0012, 0.0030, 0.0100):
+            dimensionado = lc.standard_forex_lots(100.0, sl, EURUSD)
+            directo = lc.risk_per_unit(sl, EURUSD)
+            assert directo == pytest.approx(dimensionado["risk_per_unit"]), \
+                f"SL={sl}: {directo} != {dimensionado['risk_per_unit']}"
+
+    def test_el_lot_size_no_se_multiplica_en_el_riesgo(self):
+        """El invariante que se rompió: riesgo por lote = ticks × tick_value.
+
+        En MT5, `SYMBOL_TRADE_TICK_VALUE` es el dinero que mueve la cuenta por un
+        tick de UN lote — el contrato ya está dentro. Multiplicarlo otra vez por el
+        `lot_size` inflaría el riesgo del lote 100.000 veces en EURUSD, y el
+        síntoma sería que toda operación se rechaza por "riesgo excede el
+        presupuesto" con cifras de millones cuando el presupuesto son decenas.
+        """
+        riesgo = lc.risk_per_unit(0.0012, EURUSD)
+        # 0.0012 / 0.00001 = 120 ticks, a 1.00 USD por tick y lote = 120 USD.
+        assert riesgo == pytest.approx(120.0)
+        # Y con 0.10 lotes son 12 USD, no 1.200.000.
+        assert riesgo * 0.10 == pytest.approx(12.0)
+
+    def test_un_lot_size_distinto_no_cambia_el_riesgo_por_lote(self):
+        """El tamaño del contrato no entra: el tick value ya lo trae dentro.
+
+        Dos specs que se diferencian solo en `lot_size` describen el mismo
+        instrumento a efectos de riesgo por lote. Si el cálculo dependiera del
+        contrato, un símbolo con contrato de 10.000 daría un riesgo distinto del
+        mismo símbolo con 100.000 sin que nada hubiera cambiado en el mercado.
+        """
+        grande = lc.LotSpec(lot_size=100_000, tick_value=1.0, tick_size=0.00001,
+                            min_lot=0.01, lot_step=0.01)
+        pequeno = lc.LotSpec(lot_size=1_000, tick_value=1.0, tick_size=0.00001,
+                             min_lot=0.01, lot_step=0.01)
+        assert lc.risk_per_unit(0.0012, grande) == pytest.approx(
+            lc.risk_per_unit(0.0012, pequeno))
+
+    def test_sl_mas_fino_que_el_tick_es_error_tambien_aqui(self):
+        """La guarda de los stops no colocables se comparte, no se reimplementa."""
+        with pytest.raises(ValueError) as exc:
+            lc.risk_per_unit(0.000001, EURUSD)
+        assert "tick" in str(exc.value)
+
+    def test_sl_cero_o_negativo_es_error(self):
+        with pytest.raises(ValueError):
+            lc.risk_per_unit(0.0, EURUSD)
+        with pytest.raises(ValueError):
+            lc.risk_per_unit(-0.0012, EURUSD)
+
+
 class TestB3Contracts:
     def test_tamano_en_contratos(self):
         # 50 puntos de SL son 10 ticks del minicontrato (punto de 5), a 0.20 USD
