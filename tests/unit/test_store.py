@@ -35,6 +35,14 @@ from database import store
 PROJECT_DIR = Path(core_paths.PROJECT_DIR)
 
 
+def _yaml_real() -> dict:
+    """El `config/strategy.yaml` que se reparte, leído del disco."""
+    import yaml
+
+    with open(core_paths.STRATEGY_PATH, "r", encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or {}
+
+
 # ---------------------------------------------------------------------------
 # Fakes
 # ---------------------------------------------------------------------------
@@ -93,7 +101,8 @@ class TestSeamDeConfiguracion:
             "import sys\n"
             "import database.store\n"
             "print(','.join(sorted(m for m in sys.modules\n"
-            "    if m in ('strategy','MetaTrader5','yaml'))))\n"
+            "    if m in ('strategy','core.strategy','settings.strategy_source',"
+            "'MetaTrader5','yaml'))))\n"
         )
         proc = subprocess.run(
             [sys.executable, "-c", code],
@@ -105,21 +114,50 @@ class TestSeamDeConfiguracion:
             % proc.stdout.strip()
         )
 
-    def test_el_default_azosa_strategy_en_vez_de_importarlo_al_arrancar(self):
-        """El default sigue siendo `strategy` (produccion no cambia), pero es
-        un import tardio: la Fase 6 solo entra si alguien pide la config."""
+    def test_el_default_azosa_el_yaml_en_vez_de_importarlo_al_arrancar(self):
+        """El default sigue siendo el YAML de producción, pero a través de un import
+        tardío: la Fase 6 solo entra si alguien pide la config."""
         assert isinstance(store._LazyStrategyConfig(), store.ConfigSource)
         assert store._config_source is not None
 
-    def test_sin_strategy_el_error_dice_como_resolverlo(self):
-        """Falta `strategy` hoy (Fase 6). El fallo tiene que ser accionable, no un
-        ImportError desnudo a mitad de una escritura."""
+    def test_el_default_lee_el_yaml_real(self):
+        """Con la Fase 6 ya exists, el seam por defecto materializa el YAML de verdad.
+
+        Antes esto no podía existir: sin `strategy` el seam solo servía para inyectar
+        un fake, así que la ruta de producción (leer `config/strategy.yaml`) no la
+        cubría ningún test.
+        """
         source = store._LazyStrategyConfig()
-        with pytest.raises(RuntimeError) as exc:
-            source.get_config()
-        msg = str(exc.value)
-        assert "Fase 6" in msg
-        assert "set_config_source" in msg
+        cfg = source.get_config()
+        doc = _yaml_real()
+        assert cfg["min_score"] == doc["score"]["min_score"]
+        assert cfg["magic"] == doc["execution"]["magic"]
+        assert source.data_sources()["orderflow"] is False
+        assert {s["symbol"] for s in source.watcher_config()["symbols"]} == {
+            s["symbol"] for s in doc["watcher"]["symbols"]
+        }
+
+    def test_sin_yaml_el_error_dice_como_resolverlo(self, tmp_path, monkeypatch):
+        """Un YAML ausente es `ConfigUnavailable` con un mensaje accionable, no un
+        `FileNotFoundError` a mitad de una escritura.
+
+        El seam traduce `StrategyConfigError` (que es del módulo que lee el fichero)
+        a su propia excepción: quien habla con `store` necesita un solo tipo que
+        capturar y un solo significado, sea cual sea la capa que falló.
+        """
+        from settings import strategy_source
+
+        monkeypatch.setattr(strategy_source, "STRATEGY_PATH", str(tmp_path / "no-existe.yaml"))
+        strategy_source.invalidate()
+        source = store._LazyStrategyConfig()
+        try:
+            with pytest.raises(store.ConfigUnavailable) as exc:
+                source.get_config()
+            msg = str(exc.value)
+            assert "no-existe.yaml" in msg
+            assert "obligatorio" in msg
+        finally:
+            strategy_source.invalidate()
 
     def test_set_config_source_devuelve_el_anterior_y_se_puede_restaurar(self):
         first = FakeConfigSource({"a": 1})
@@ -164,6 +202,116 @@ class TestSeamDeConfiguracion:
         summary = store.get_config_summary()
         assert summary["risk_weights"] == {}
         assert summary["killzones"] == []
+
+
+# ---------------------------------------------------------------------------
+# El resumen contra el YAML REAL que se reparte
+# ---------------------------------------------------------------------------
+
+
+class TestResumenContraElYamlReal:
+    """`get_config_summary` contra `config/strategy.yaml`, no contra un invento.
+
+    El bug que esto cubre: la función leía `cfg["min_score"]`, `cfg["risk_pct"]` y
+    compañía, que no existen en el YAML (que anida por secciones). Con la config de
+    verdad puesta devolvía `min_score: None`, `risk_weights: {}` y `killzones: []`, y
+    la UI pintaba "sin reglas" con el sistema entero configurado. Un test con un
+    dict plano NO lo habría detectado: el dict plano es justo la forma que la
+    función equivocada esperaba.
+    """
+
+    @staticmethod
+    def _yaml_real() -> Dict[str, Any]:
+        return _yaml_real()
+
+    def test_el_resumen_refleja_el_yaml_anidado(self, db):
+        store.get_config_source().cfg = self._yaml_real()
+
+        summary = store.get_config_summary()
+
+        assert summary["min_score"] == 59.5
+        assert summary["min_rr"] == 2.0
+        assert summary["setup_ttl_minutes"] == 40.0
+        assert summary["risk_pct"] == 0.5
+        assert summary["loss_limit_fixed"] == 400.0
+        assert summary["loss_limit_pct"] == 1.6
+        assert summary["max_trades_day"] == 3
+        assert summary["news_buffer_min"] == 15
+        assert summary["prop_enabled"] is False
+        assert summary["prop_max_dd_daily_pct"] == 2.0
+        assert summary["prop_max_dd_total_pct"] == 6.0
+        assert summary["prop_max_profit_day_pct"] == 1.5
+        assert summary["prop_consistency_days"] == 4
+
+    def test_los_pesos_y_las_killzones_salen_de_sus_secciones(self, db):
+        store.get_config_source().cfg = self._yaml_real()
+
+        summary = store.get_config_summary()
+
+        assert summary["risk_weights"] == {
+            "cot": 0.0,
+            "cvd_of": 20.0,
+            "smc": 50.0,
+            "killzone": 0.0,
+            "smr_dxy": 15.0,
+        }
+        assert [kz["name"] for kz in summary["killzones"]] == ["Londres", "Nueva York"]
+        assert summary["killzones"][0] == {
+            "name": "Londres",
+            "start": "07:00",
+            "end": "10:00",
+        }
+
+    def test_data_sources_llega_entero(self, db):
+        store.get_config_source().cfg = self._yaml_real()
+
+        fuentes = store.get_config_summary()["data_sources"]
+
+        assert fuentes["orderflow"] is False
+        assert fuentes["news"] is True
+
+    def test_la_config_plana_antigua_sigue_sirviendo(self, db):
+        """Una config guardada por la UI de antes es plana. Leerla no cuesta nada."""
+        store.get_config_source().cfg = {
+            "min_score": 61,
+            "risk_pct": 0.75,
+            "prop_enabled": 1,
+            "prop_max_dd_daily_pct": 2.5,
+        }
+
+        summary = store.get_config_summary()
+
+        assert summary["min_score"] == 61
+        assert summary["risk_pct"] == 0.75
+        assert summary["prop_enabled"] is True
+        assert summary["prop_max_dd_daily_pct"] == 2.5
+
+    def test_anidado_gana_al_plano(self, db):
+        """Con las dos formas presentes manda el YAML: es el que se carga hoy."""
+        store.get_config_source().cfg = {
+            "score": {"min_score": 59.5},
+            "min_score": 12.0,
+        }
+
+        assert store.get_config_summary()["min_score"] == 59.5
+
+    def test_una_seccion_que_falta_no_rompe(self, db):
+        store.get_config_source().cfg = {"score": {"min_score": 55.0}}
+
+        summary = store.get_config_summary()
+
+        assert summary["min_score"] == 55.0
+        assert summary["risk_pct"] is None
+        assert summary["killzones"] == []
+        assert summary["prop_enabled"] is False
+
+    def test_todas_las_claves_del_resumen_existen_en_la_tabla(self, db):
+        """Si alguien añade una clave al resumen y no a `RESUMEN_CLAVES`, sale plana."""
+        store.get_config_source().cfg = self._yaml_real()
+
+        resumen = store.get_config_summary()
+
+        assert set(resumen) == {clave for clave, _, _ in store.RESUMEN_CLAVES}
 
 
 # ---------------------------------------------------------------------------

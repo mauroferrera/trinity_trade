@@ -469,19 +469,30 @@ class TestJournal:
     def test_el_simbolo_por_defecto_es_eurusd(self, db):
         assert store.add_journal_entry({"action": "BUY"})["symbol"] == "EURUSD"
 
-    def test_init_db_sobrevive_sin_config_y_avisa(self, db):
-        """Crear el esquema no puede depender de `strategy` (que es de la Fase 6).
+    def test_init_db_sobrevive_sin_config_y_avisa(self, db, tmp_path, monkeypatch):
+        """Crear el esquema no puede depender de que haya estrategia cargada.
 
         El prompt del rol sale del YAML, así que sembrarlo sin config es
         imposible... pero que eso tumbe `init_db()` sería al revés de lo
         razonable: el esquema tiene que existir ANTES de que haya estrategia.
         Se comprueban las tres cosas: que no tumba, que avisa, y que la fila
         existe igual para poder rellenarla más adelante.
-        """
-        store.set_config_source(None)  # el default lazy: strategy no existe
 
-        with pytest.warns(RuntimeWarning, match="prompt"):
-            store.init_db()
+        "Sin config" se simula apuntando el seam al default con un YAML que no
+        existe: el default ya lee `config/strategy.yaml` de verdad, así que el
+        `set_config_source(None)` de antes ya no significaba nada.
+        """
+        from settings import strategy_source
+
+        monkeypatch.setattr(strategy_source, "STRATEGY_PATH", str(tmp_path / "ausente.yaml"))
+        strategy_source.invalidate()
+        store.set_config_source(None)  # el default lazy: ahora sobre un YAML inexistente
+
+        try:
+            with pytest.warns(RuntimeWarning, match="prompt"):
+                store.init_db()
+        finally:
+            strategy_source.invalidate()
 
         conn = _raw(db)
         row = conn.execute(

@@ -12,8 +12,9 @@ sin la pila completa, y que la ruta de la base estuviera definida en dos sitios.
   1. El reloj viene de `core.clock`, que es puro. No se tira nada: la mitad de
      broker de `tclock` sigue donde estaba y se conectará cuando haya MT5.
   2. La configuración entra por un seam inyectable (`set_config_source`), con un
-     default perezoso que importa `strategy` al primer uso. Importar este módulo
-     ya no arrastra la Fase 6, y los tests pueden meter una config falsa.
+     default perezoso que importa `settings.strategy_source` al primer uso.
+     Importar este módulo ya no arrastra `yaml` ni `core.strategy`, y los tests
+     pueden meter una config falsa.
   3. `DB_PATH` se IMPORTA de `core.paths` en vez de recomponerse aquí. REF lo
      recomponía (`os.path.join(PROJECT_DIR, "trading.db")`) mientras
      `core.paths` tenía su propia constante, y solo coincidían por casualidad;
@@ -101,18 +102,26 @@ def _safe_json(raw, default):
 # cuerpo, importar `store` cargaba la Fase 6 entera: no se podía probar la capa
 # de persistencia sin la de estrategia, y sin PILA completa.
 #
-# Con un seam, el default sigue siendo `strategy` —comportamiento idéntico en
-# producción— pero es un import TARDÍO: la Fase 6 solo entra si alguien pide la
-# config. Un test mete un `FakeConfigSource` y exercises todo el CRUD sin YAML.
+# Con un seam, el default es el YAML de producción —comportamiento idéntico en
+# producción— pero a través de un import TARDÍO: la Fase 6 solo entra si alguien
+# pide la config. Un test mete un `FakeConfigSource` y ejerce todo el CRUD sin
+# YAML. Ese default es `settings.strategy_source` porque `core/` no puede abrir
+# ficheros (ver el test de pureza) y meter la lectura del YAML aquí ataría
+# `store` a una segunda fuente de verdad.
 
 
 class ConfigUnavailable(RuntimeError):
-    """No hay `ConfigSource` utilizable (normalmente: aún no existe `strategy`).
+    """No hay `ConfigSource` utilizable (o no hay `strategy.yaml` legible).
 
     Existe como tipo propio, y no un `RuntimeError` genérico, porque hay dos
     reacciones MUY distintas ante el mismo fallo y hay que poder distinguirlas:
     `default_trading_config()` debe estallar (quien la llama la quiere de verdad),
     mientras que la siembra de un rol vacío debe poder seguir. Ver `_seed_defaults`.
+
+    `settings.strategy_source` lanza `StrategyConfigError` (que es de lectura del
+    YAML, no de esta capa); el seam la traduce a esta, para que todo lo que habla
+    con `store` —la API, el agente, la siembra— tenga una sola excepción que
+    capturar y un solo significado: "aquí no hay config que usar".
     """
 
 
@@ -128,38 +137,48 @@ class ConfigSource(Protocol):
 
 
 class _LazyStrategyConfig:
-    """Default del seam: traduce a la API de `strategy` cuando hace falta.
+    """Default del seam: traduce a `settings.strategy_source` cuando hace falta.
 
     El import va dentro del método a propósito. Si estuviera arriba del todo,
-    bastaría con que un test importara `store` para que `strategy` —y con él
-    `yaml` y `risk_engine`— se cargara igual, y el seam no serviría de nada.
+    bastaría con que un test importara `store` para que la config —y con ella
+    `yaml` y `core.strategy`— se cargara igual, y el seam no serviría de nada.
     """
 
     def _mod(self):
         try:
-            import strategy  # noqa: PLC0415 - tardío a propósito (ver docstring)
-        except ImportError as exc:  # pragma: no cover - depende del entorno
+            from settings import strategy_source  # noqa: PLC0415 - tardío (docstring)
+        except ImportError as exc:  # pragma: no cover - el paquete está en el repo
             raise ConfigUnavailable(
-                "store necesita la configuración y 'strategy' todavía no existe "
-                "(Fase 6). Inyecta una con store.set_config_source(...), o llama "
-                "a las funciones de DB que no dependen de la config."
+                "store necesita la configuración y 'settings.strategy_source' no se "
+                "puede importar. Inyecta una con store.set_config_source(...), o "
+                "llama a las funciones de DB que no dependen de la config."
             ) from exc
-        return strategy
+        return strategy_source
 
     def get_config(self) -> dict:
-        return self._mod().get_config()
+        return self._config(self._mod().get_config)
 
     def save_config(self, cfg: dict) -> None:
-        self._mod().save(cfg or {})
+        self._config(self._mod().save, cfg or {})
 
     def data_sources(self) -> dict:
-        return self._mod().get_data_sources()
+        return self._config(self._mod().get_data_sources)
 
     def agent_topics(self) -> dict:
-        return self._mod().get_agent_topics()
+        return self._config(self._mod().get_agent_topics)
 
     def watcher_config(self) -> dict:
-        return self._mod().get_watcher_config() or {}
+        return self._config(self._mod().get_watcher_config) or {}
+
+    @staticmethod
+    def _config(llamar, *args) -> dict:
+        """Ejecuta `llamar` traduciendo un YAML ilegible a `ConfigUnavailable`."""
+        from core.strategy import StrategyConfigError  # noqa: PLC0415 - tardío (yaml)
+
+        try:
+            return llamar(*args)
+        except StrategyConfigError as exc:
+            raise ConfigUnavailable(str(exc)) from exc
 
 
 _config_source: ConfigSource = _LazyStrategyConfig()
@@ -351,39 +370,93 @@ def get_agent_topics():
     return _config_source.agent_topics()
 
 
+#: `(clave del resumen, ruta anidada en el YAML, clave plana heredada)`.
+#:
+#: El resumen se publica en la UI, así que sus claves son planas y están fijadas; lo
+#: que cambia es de dónde se leen. `strategy.yaml` anida por secciones (`score.min_score`,
+#: `risk.risk_pct`, `prop.max_dd_daily_pct`) y esta función leía `cfg["min_score"]`,
+#: que no existe: devolvía `min_score: None`, `risk_weights: {}` y `killzones: []`
+#: con la config REAL puesta, que es peor que un error porque la UI pintaba "sin
+#: reglas" con un sistema entero configurado.
+#:
+#: La tercera columna es el fallback plano. Se mantiene porque `set_trading_config`
+#: guarda lo que le manda el cliente sin revalidar la forma, y una config guardada
+#: por la UI antigua sigue siendo plana: leerla bien no cuesta nada y evita que un
+#: cambio de esquema borre las reglas de alguien al reiniciar.
+RESUMEN_CLAVES = (
+    ("risk_weights", ("score", "weights"), "risk_weights"),
+    ("killzones", ("killzones",), "killzones"),
+    ("data_sources", ("data_sources",), "data_sources"),
+    ("min_score", ("score", "min_score"), "min_score"),
+    ("min_rr", ("score", "min_rr"), "min_rr"),
+    ("setup_ttl_minutes", ("score", "setup_ttl_minutes"), "setup_ttl_minutes"),
+    ("max_trades_day", ("risk", "max_trades_day"), "max_trades_day"),
+    ("risk_pct", ("risk", "risk_pct"), "risk_pct"),
+    ("loss_limit_fixed", ("risk", "loss_limit_fixed"), "loss_limit_fixed"),
+    ("loss_limit_pct", ("risk", "loss_limit_pct"), "loss_limit_pct"),
+    ("prop_enabled", ("prop", "enabled"), "prop_enabled"),
+    ("prop_max_dd_daily_pct", ("prop", "max_dd_daily_pct"), "prop_max_dd_daily_pct"),
+    ("prop_max_dd_total_pct", ("prop", "max_dd_total_pct"), "prop_max_dd_total_pct"),
+    ("prop_max_profit_day_pct", ("prop", "max_profit_day_pct"), "prop_max_profit_day_pct"),
+    ("prop_consistency_days", ("prop", "consistency_days"), "prop_consistency_days"),
+    ("news_buffer_min", ("execution", "news_buffer_min"), "news_buffer_min"),
+    ("agent_risk_policy", ("agent", "risk_policy"), "agent_risk_policy"),
+)
+
+
+def _anidado(cfg: dict, ruta):
+    """El valor en `ruta`, o `None` si la sección no está."""
+    actual = cfg
+    for parte in ruta:
+        if not isinstance(actual, dict) or parte not in actual:
+            return None
+        actual = actual[parte]
+    return actual
+
+
+def _coacciona(valor, defecto):
+    """`killzones` y `weights` pueden venir como lista/dict (YAML) o como JSON.
+
+    El store guardaba estas dos como texto, así que hay bases ya escritas con la
+    forma antigua. Un JSON roto degrada a `defecto` en vez de propagar: este resumen
+    se pinta en la UI y un 500 por una regla mal formada es una pantalla en blanco.
+    """
+    if valor is None or valor == "":
+        return defecto
+    if isinstance(valor, str):
+        try:
+            return json.loads(valor)
+        except (json.JSONDecodeError, TypeError):
+            return defecto
+    return valor
+
+
 def get_config_summary():
-    """Resumen de reglas activas (visible en la UI) a partir del YAML."""
+    """Resumen de reglas activas (visible en la UI) a partir del YAML.
+
+    Lee la config por secciones (`score.*`, `risk.*`, `prop.*`, `execution.*`) y
+    devuelve las claves planas de siempre, porque esas son las que la UI ya sabe
+    pintar. El fallback plano está en `RESUMEN_CLAVES` y su porqué, ahí.
+    """
     cfg = _config_source.get_config() or {}
-    risk_weights = cfg.get("risk_weights") or "{}"
-    killzones = cfg.get("killzones") or "[]"
-    try:
-        weights = json.loads(risk_weights) if isinstance(risk_weights, str) else risk_weights
-    except (json.JSONDecodeError, TypeError):
-        weights = {}
-    try:
-        kz = json.loads(killzones) if isinstance(killzones, str) else killzones
-    except (json.JSONDecodeError, TypeError):
-        kz = []
-    return {
-        "risk_weights": weights,
-        "killzones": [{"name": w.get("name"), "start": w.get("start"), "end": w.get("end")}
-                      for w in kz if isinstance(w, dict)],
-        "data_sources": cfg.get("data_sources") or {},
-        "min_score": cfg.get("min_score"),
-        "min_rr": cfg.get("min_rr"),
-        "setup_ttl_minutes": cfg.get("setup_ttl_minutes"),
-        "max_trades_day": cfg.get("max_trades_day"),
-        "risk_pct": cfg.get("risk_pct"),
-        "loss_limit_fixed": cfg.get("loss_limit_fixed"),
-        "loss_limit_pct": cfg.get("loss_limit_pct"),
-        "prop_enabled": bool(cfg.get("prop_enabled")),
-        "prop_max_dd_daily_pct": cfg.get("prop_max_dd_daily_pct"),
-        "prop_max_dd_total_pct": cfg.get("prop_max_dd_total_pct"),
-        "prop_max_profit_day_pct": cfg.get("prop_max_profit_day_pct"),
-        "prop_consistency_days": cfg.get("prop_consistency_days"),
-        "news_buffer_min": cfg.get("news_buffer_min"),
-        "agent_risk_policy": cfg.get("agent_risk_policy") or "",
-    }
+    resumen = {}
+    for clave, ruta, plana in RESUMEN_CLAVES:
+        valor = _anidado(cfg, ruta)
+        if valor is None:
+            valor = cfg.get(plana)
+        resumen[clave] = valor
+
+    killzones = _coacciona(resumen["killzones"], [])
+    resumen["killzones"] = [
+        {"name": w.get("name"), "start": w.get("start"), "end": w.get("end")}
+        for w in (killzones or [])
+        if isinstance(w, dict)
+    ]
+    resumen["risk_weights"] = _coacciona(resumen["risk_weights"], {})
+    resumen["data_sources"] = resumen["data_sources"] or {}
+    resumen["agent_risk_policy"] = resumen["agent_risk_policy"] or ""
+    resumen["prop_enabled"] = bool(resumen["prop_enabled"])
+    return resumen
 
 
 # ============================================================
