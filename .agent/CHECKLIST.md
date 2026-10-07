@@ -462,3 +462,64 @@ cifras históricas no se reproducen.
 **Pendiente fuera de alcance:** rotar la clave de Databento (se pegó en texto plano antes de
 pasarla a `.env`), `data_sources.orderflow: true`, cablear `databento_cme.py` como feed en
 vivo y las redes neuronales (postergadas; el motor determinista sigue siendo el baseline).
+
+### Hito "Convalidación de la estrategia sobre cinta real 6E" (cerrado)
+
+**Fecha:** 2026-10-06 | **Veredicto:** NO convalida (D-068..D-070)
+
+**Qué se añadió**
+- `research/build_6e_candles.py` — une la cinta real `6EU6` + `6EZ6` en velas M15 continuas con
+  `delta` y PDH/PDL del día UTC anterior CON DATOS; roll `2026-09-11T00:00Z` por cruce de volumen
+  (5.657 vs 30.639 ese día), cola/cabeza del roll descartadas; sidecar sha256. Salida:
+  `trinity_data/databento/candles/6E_M15_2026-07-08_2026-10-06.parquet` (5.888 barras).
+- `research/backtest_6e.py` — replay vela a vela con el core real del runtime
+  (`smc_engine.analyze` → `risk_engine.setup_score` → `setup_gate.evaluate_gate`), no `sim.py`
+  de REF. Split 60/30 + embargo 24 h (IS `[2026-07-08, 2026-09-06)`, embargo `[2026-09-06,
+  2026-09-07)`, OOS `[2026-09-07, fin)`). Dos modelos de fill: `zone_ttl` (canónico, LIMIT + TTL
+  40 min, fiel al runtime) y `next_open` (cota superior simplificada). Fricción 1 pip adversa,
+  1 contrato 6E = 25 USD/pip, `max_trades_day` 3 por fill, MFE/MAE en raw. Resultado:
+  `trinity_data/research/results/backtest_6e_20261006T231756Z.json`.
+
+**Resultados** (0.0012 SL, min_score 59.5, pesos del YAML sin recalibrar —convalidación, no
+optimización):
+- `zone_ttl` IS: 43 trades, win 20.9 %, exp **−6.465 pips** (−6.950 USD); OOS: 23 trades, win
+  39.1 %, exp +0.087 pips (+50 USD, PF 1.01).
+- `next_open` IS: 105 trades, win 47.6 %, exp −3.714 pips; OOS: 51 trades, win 49.0 %, exp
+  **−4.196 pips** (−5.350 USD).
+
+Sin edge positivo en OOS bajo ningún modelo de fill. Sesgo de dirección: IS 25 BUY/18 SELL vs
+OOS 3 BUY/20 SELL (29 % BUY) → tendencia del periodo, no del sistema. Cierres: 48 SL / 18 TP.
+Rechazos: 5.404 detectados, 693 aprobados; top fuera de killzone 3.988 (~74 %), luego score < 59.5.
+
+**Lo que se decidió y no se vuelve a preguntar** (D-068..D-070): convalidación empírica con
+backtest sobre cinta real en vez de más calibración; roll por exclusión medido en la cinta;
+failure modes gratis del `reason_tally` del gate; el veredicto se entrega con los dos fills, no
+se filtra por métrica.
+
+**Pendiente fuera de alcance:** revalidación futura si cambian el gate o la mecánica de fills
+(el pipeline se regenera sin pagar de nuevo).
+
+### Hito "Arquitectura multi-estrategia" (plan aprobado, D-071)
+
+**Fecha:** 2026-10-06 | **Estado:** plan fijado y documentado; ejecución a partir de la F1.
+
+**Qué se decidió** (incorporado del operador, 4 opciones aprobadas)
+- F0 = cierre administrativo de 6E (commit + docs de `research/`), sin deploy a demo. **Rotar la
+  API key de Databento: dejada como está por decisión del usuario.**
+- ILOF entra como "módulo presente en investigación": el veredicto NO convalida no bloquea la
+  infraestructura multi-perfil; se revalidará aislado en `research/`.
+- Config por perfil: `strategy_<perfil>.yaml` + `strategy_map` (magic→perfil), reutilizando
+  `STRATEGY_PATH`; `sl_distance_by_symbol` → `by_profile_by_symbol`.
+- Datos del CTA: MT5 demo `copy_rates` (D1/H4, EURUSD/XAUUSD/US500/GBPUSD/AUDUSD); Databento
+  solo para microestructura intradía.
+
+**Principios no negociables:** convalidación antes que conexión (nada en vivo sin veredicto OOS);
+`ExecutionService` única puerta; `regime()` como árbitro; despliegue nuevo empieza en alerta
+(`auto_execute=false`, D-063); suite en verde por commit.
+
+**Fases (detalle en `ROADMAP.md`):** F0 cierre 6E → F1 multi-perfil (strategy_map + DD por magic)
+→ F2 convalidación CTA → F3 convalidación VWAP + régimen como interruptor → F4 despliegue en
+alerta → F5 ejecución multi-estrategia (`core/exit_policy.py`, gates por perfil).
+
+**Pendiencias abiertas:** rotar la API key de Databento (usuario decide); nº de estrategias que
+superen la convalidación OOS (nada más correcto que el backtest para decidirlo).

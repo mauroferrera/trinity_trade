@@ -177,3 +177,48 @@ Ver `DECISIONS.md` (D-005) y `PROJECT_STATE.json` (`reference_code`).
 - [ ] `data_sources.orderflow: true` y cablear `adapters/forex/databento_cme.py` como feed en vivo
 - [ ] `GET|POST /api/orderflow/feed` y `GET /api/orderflow/fixtures` — el fixture ya existe, el endpoint no
 - [ ] Redes neuronales: postergadas; el motor determinista (`smc_engine.py` + `orderflow_engine.py`) sigue siendo el baseline
+
+## Hito transversal – Convalidación de la estrategia sobre cinta real 6E (backtest IS/OOS)
+**Estado:** Completa (2026-10-06) | **Prioridad:** Alta (veredicto empírico del gate sobre 90 días de cinta real)
+
+**Hitos:**
+- [x] Descarga real 90 días (2,49 USD): `6EU6` + `6EZ6`, roll detectado en la cinta (2026-09-11, 5.657 vs 30.639) sin offsets artificiales
+- [x] `research/build_6e_candles.py`: velas M15 continuas + `delta` + PDH/PDL por día anterior CON DATOS → parquet + sidecar sha256 (5.888 barras)
+- [x] `research/backtest_6e.py`: replay con el core real (`smc_engine` → `setup_score` → `evaluate_gate`), split 60/30 + embargo 24 h, `zone_ttl` (canónico) y `next_open` (cota), MFE/MAE, `reason_tally`, JSON de resultados
+- [x] Veredicto: **NO convalida** — OOS sin edge positivo bajo ningún fill (`zone_ttl` +0.087 pips n=23; `next_open` −4.196 pips n=51); sesgo de dirección cambia de signo IS→OOS (tendencia, no sistema)
+- [x] Memoria: D-068..D-070, `MEJORAS_DATABENTO.md` §7, checklist, roadmap, `PROJECT_STATE.json`
+
+**Criterios de Aceptación:**
+- [x] Backtest con el mismo pipeline que el runtime (no `sim.py` de REF), pesos/min_score del YAML efectivos
+- [x] Split IS/OOS sin recalibrar umbrales; única calibración `sl_distance_by_symbol["6E"]` en IS
+- [x] Datos y resultados fuera del repo/OneDrive (`trinity_data`), regenerables sin pagar de nuevo
+- [x] Failure modes del operador cubiertos por `reason_tally` de `evaluate_gate`
+
+**Pendientes explícitos (fuera del alcance de este hito):**
+- [ ] Rotar la clave de Databento (sigue pendiente desde el hito de calibración)
+- [ ] Revalidación futura si cambian el gate o la mecánica de fills (pipeline reproducible)
+
+## Hoja de ruta multi-estrategia (D-071) — CTA Swing + Mean Reversion + Copilot + ILOF
+**Estado:** Plan aprobado (2026-10-06) | **Prioridad:** Media-alta (después de cerrar 6E)
+
+Principios (no negociables): convalidación antes que conexión (nada en vivo sin veredicto OOS);
+`ExecutionService` = única puerta de salida; `regime()` = árbitro de desactivación mutua; los
+módulos nuevos nacen en `research/` y se despliegan primero en alerta (`auto_execute=false`);
+suite en verde como criterio de aceptación.
+
+- [ ] **F0 – Cierre limpio de 6E** (solo administrativo, sin deploy demo): commit + documentación
+  de `research/`. Rotar `DATABENTO_API_KEY` queda PENDIENTE por decisión del usuario.
+- [ ] **F1 – Infraestructura multi-perfil**: `strategy_map` (magic→perfil), `strategy_<perfil>.yaml`
+  vía `STRATEGY_PATH`, `sl_distance_by_symbol` → `by_profile_by_symbol`; `daily_risk_state` expone
+  DD/topes por magic y global. ILOF = "módulo presente en investigación". Sin cambios de ejecución.
+- [ ] **F2 – Convalidación CTA en `research/`**: OHLCV D1 de MT5 demo (EURUSD, XAUUSD, US500,
+  GBPUSD, AUDUSD, 2 años), simulador breakout próximo-open + trailing ATR + vol-targeting en
+  `lot_calculator`; réplica IS/OOS + embargo + fricción. **Gate: solo pasa si OOS supera la fricción.**
+- [ ] **F3 – Convalidación Mean Reversion (VWAP)**: mismo proceso; `regime()` como interruptor
+  (expansión→ILOF+CTA, compresión→VWAP, noticias→solo Copilot).
+- [ ] **F4 – Despliegue en alerta**: módulos validados corren simulados con su magic y perfil.
+  Cero órdenes reales.
+- [ ] **F5 – Ejecución multi-estrategia**: activación vía `ExecutionService` con plan y `exit_policy`
+  por perfil (nuevo `core/exit_policy.py` para trailing D1); Copilot manual siempre abierto.
+
+**Pendientes explícitos:** rotar la clave de Databento (heredado), decide el usuario.

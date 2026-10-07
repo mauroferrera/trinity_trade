@@ -2,7 +2,7 @@
   "project_name": "MultiMarket Quant Engine",
   "version": "0.1.0",
   "active_phase": "Phase 7 - Multi-mercado (forex + B3 + cripto)",
-  "status": "calibracion_order_flow_cinta_real_databento_terminada",
+  "status": "convalidacion_estrategia_6e_sobre_cinta_real_terminada_veredicto_no_convalida",
   "last_updated": "2026-10-06",
   "blockers": [],
   "repo": {
@@ -129,7 +129,10 @@
     "research/build_real_fixture.py - fixture real regenerable byte-identico (bloque 5)",
     "tests/unit/test_orderflow_real.py - reality-check sobre cinta real (bloque 5)",
     "tests/unit/test_paths.py - guardian de la raiz de datos (bloque 1)",
-    "MEJORAS_DATABENTO.md - historico de roll, reconciliacion y parametros (bloque 6)"
+    "MEJORAS_DATABENTO.md - historico de roll, reconciliacion y parametros (bloque 6)",
+    "research/build_6e_candles.py - unio de 6EU6+6EZ6 en velas M15 continuas con delta y PDH/PDL + sidecar sha256",
+    "research/backtest_6e.py - replay IS/OOS/embargo con el core real (smc_engine -> setup_score -> evaluate_gate), dos modelos de fill, MFE/MAE y reason_tally",
+    "backtest 6E: dataset de velas M15 (5.888 barras) y JSON de resultados en trinity_data, fuera del repo"
   ],
   "in_progress": [
     "el bucle del watcher: cuando exista, entra por ExecutionService (D-063). El scan por HTTP ya esta."
@@ -649,5 +652,100 @@
       "Cablear databento_cme.py como feed en vivo",
       "Endpoints /api/orderflow/feed y /api/orderflow/fixtures"
     ]
+  },
+  "backtest_6e_validation_results": {
+    "hito": "Convalidacion de la estrategia sobre cinta real 6E (backtest IS/OOS)",
+    "fecha": "2026-10-06",
+    "estado": "completo",
+    "veredicto": "NO CONVALIDA (D-068, D-069, D-070)",
+    "costo_descarga": "2.49 USD (no 6 presupuestados)",
+    "cinta": {
+      "fuentes": [
+        "databento/raw/GLBX_6EU6_trades_2026-07-08_2026-09-12_*.parquet (1.343.300 trades)",
+        "databento/raw/GLBX_6EZ6_trades_2026-09-11_2026-10-06_*.parquet (646.492 trades)"
+      ],
+      "roll": "2026-09-11T00:00:00Z por cruce de volumen (6EU6 5.657 vs 6EZ6 30.639 ese dia); cola del viejo y cabeza del nuevo descartadas",
+      "restriccion": "setups iniciados en [2026-09-10T00:00Z, 2026-09-12T00:00Z) => excluidos, no rechazos",
+      "dia_degradado": "2026-08-29 (en IS, documentado en el sidecar)"
+    },
+    "velas": {
+      "fichero": "databento/candles/6E_M15_2026-07-08_2026-10-06.parquet (+ .meta.json)",
+      "barras": 5888,
+      "columnas": "time/open/high/low/close/volume/delta/pdh/pdl",
+      "regenerar": "python research/build_6e_candles.py (sin volver a pagar)"
+    },
+    "split": {
+      "is": "[2026-07-08 00:00Z, 2026-09-06 00:00Z) (60 dias, contiene el degradado)",
+      "embargo": "[2026-09-06 00:00Z, 2026-09-07 00:00Z) (solo contexto, sin setups)",
+      "oos": "[2026-09-07 00:00Z, fin) (~30 dias, contiene el roll)"
+    },
+    "calibracion": {
+      "unica": "sl_distance_by_symbol['6E'] = 0.0012 con SOLO datos IS (origen 'symbol')",
+      "sin_recalibrar": "min_score 59.5, pesos {cot:0, cvd_of:20, smc:50, killzone:0, smr_dxy:15}, TTL 40"
+    },
+    "efectos_del_simulador": {
+      "friccion": "1 pip (0.0001) adversa a entrada y salida",
+      "contrato": "1 x 6E = 25 USD por pip",
+      "max_trades_day": "3 por dia UTC, contado por FILL",
+      "mfe_mae": "en raw (sin friccion)",
+      "canonico": "LIMIT en la zona con TTL 40 min; expira sin relleno; a mercado al open de la vela siguiente",
+      "gap": "limite con gap -> fill al open (peor precio); SL primero si la misma vela toca ambos"
+    },
+    "pipeline": "smc_engine.analyze (300 velas + PDH/PDL del dia UTC anterior CON DATOS) -> risk_engine.setup_score -> setup_gate.evaluate_gate (no sim.py de REF)",
+    "resultados": {
+      "zone_ttl": {
+        "is": {"n": 43, "win": "20.9 %", "exp_pips": -6.465, "exp_usd": -6950},
+        "oos": {"n": 23, "win": "39.1 %", "exp_pips": 0.087, "exp_usd": 50, "pf": 1.01}
+      },
+      "next_open": {
+        "is": {"n": 105, "win": "47.6 %", "exp_pips": -3.714, "exp_usd": null},
+        "oos": {"n": 51, "win": "49.0 %", "exp_pips": -4.196, "exp_usd": -5350}
+      }
+    },
+    "hallazgos": [
+      "Sin edge positivo en OOS bajo NINGUN modelo de fill: la esperanza no supera la friccion de 1 pip mas la mecanica de fills",
+      "Sesgo de direccion: IS 25 BUY/18 SELL vs OOS 3 BUY/20 SELL (29 % BUY) = sesgo de tendencia del periodo, no del sistema",
+      "Cierres: 48 SL / 18 TP",
+      "Rechazos: 5.404 detectados, 693 aprobados; ~74 % fuera de killzone (peso killzone 0.0), despues score < 59.5; score efectivo del gate ~70/85 = 82 %, fiel al runtime",
+      "627/693 aprobados no se ejecutan en el modo canonico (expiran sin relleno del LIMIT)"
+    ],
+    "ficheros_nuevos": [
+      "research/build_6e_candles.py",
+      "research/backtest_6e.py",
+      "trinity_data/databento/candles/6E_M15_2026-07-08_2026-10-06.parquet (+ .meta.json)",
+      "trinity_data/research/results/backtest_6e_20261006T231756Z.json"
+    ],
+    "decisiones": [
+      "D-068",
+      "D-069",
+      "D-070"
+    ],
+    "pendiente": [
+      "Revalidar si cambian el gate o la mecanica de fills (pipeline reproducible sin pagar de nuevo)",
+      "Rotar la clave de Databento (hereda del hito de calibracion)"
+    ]
+  },
+  "multi_strategy_plan": {
+    "hito": "Arquitectura multi-estrategia (CTA Swing + Mean Reversion + Copilot + ILOF)",
+    "fecha": "2026-10-06",
+    "estado": "plan aprobado, sin codigo nuevo",
+    "decision": "D-071",
+    "veredicto_operador": "4 opciones recomendadas aprobadas integras",
+    "principios": [
+      "Convalidacion antes que conexion: ninguna estrategia en vivo sin veredicto OOS (split IS/OOS + embargo + friccion como en backtest_6e.py)",
+      "ExecutionService = unica puerta de salida; la aduana de capital no se bifurca",
+      "regime() (core/risk_engine.py) = arbitro de desactivacion mutua: expansion -> ILOF+CTA, compression -> VWAP, noticias -> solo Copilot",
+      "Despliegue nuevo empieza en alerta/simulado (auto_execute=false, D-063) y solo despues en vivo",
+      "Suite en verde por commit como criterio primario"
+    ],
+    "fases": [
+      "F0 - Cierre limpio de 6E (solo administrativo: commit + docs de research/, sin deploy demo); ROTAR DATABENTO_API_KEY DEJADO COMO ESTA por decision del usuario",
+      "F1 - Infraestructura multi-perfil: strategy_map (magic->perfil), strategy_<perfil>.yaml via STRATEGY_PATH, sl_distance_by_symbol -> by_profile_by_symbol, daily_risk_state con DD/topes por magic y global; ILOF = modulo presente en investigacion",
+      "F2 - Convalidacion CTA en research/: OHLCV D1 de MT5 demo (EURUSD, XAUUSD, US500, GBPUSD, AUDUSD, 2 anios), breakout proximo-open + trailing ATR + vol-targeting en lot_calculator; GATE: solo pasa si OOS supera la friccion",
+      "F3 - Convalidacion Mean Reversion (VWAP): mismo proceso; regime() como interruptor",
+      "F4 - Despliegue en alerta: modulos validados corren simulados con su magic y perfil, cero ordenes reales",
+      "F5 - Ejecucion multi-estrategia: activacion via ExecutionService con plan y exit_policy por perfil (nuevo core/exit_policy.py para trailing D1); Copilot manual siempre abierto"
+    ],
+    "datos_cta": "MT5 demo copy_rates (gratis, sufuciente para D1/H4); Databento SOLO para microestructura intradia (M1/M15)"
   }
 }

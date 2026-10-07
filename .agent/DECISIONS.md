@@ -1111,3 +1111,79 @@ de umbral: solo la prosa que lo describe. Y como "documentarlo" no basta,
 `tests/unit/test_orderflow_real.py` fija el sha256 del fixture contra su sidecar y vuelve a
 medir el motor, de modo que o el archivo es el que dice el sidecar, o el módulo es lo que
 dice el test. Regenerar con `research/build_real_fixture.py`, no parchear el número a mano.
+
+# CONVALIDACIÓN DE LA ESTRATEGIA SOBRE CINTA REAL 6E (2026-10-06)
+
+### D-068 - La estrategia se CONVALIDA con un backtest sobre cinta real, no con más calibración de umbrales
+
+La pregunta de fondo era si el gate (SMC + CVD + killzones + SMR) tiene edge operativo sobre 6E.
+Se responde con un backtest M15 sobre 90 días de cinta real de Databento (costo real 2,49 USD, no
+los 6 presupuestados) y NO con más ajuste de umbrales: convalidación, no optimización. El backtest
+reproduce el runtime real de Trinity —`smc_engine.analyze` (300 velas + PDH/PDL del día UTC
+anterior CON DATOS) → `risk_engine.setup_score` (CVD 30 velas, `cvd_component` con `_trend_coef`,
+weights `cot 0 / cvd_of 20 / smc 50 / killzone 0 / smr_dxy 15`, killzones Londres 07:00-10:00 y
+NY 12:30-15:30 UTC) → `setup_gate.evaluate_gate`—, no un `sim.py` de REF. Los cuatro agregados del
+operador se cierran así: MFE/MAE se reportan en raw (sin retail simulator, con fricción documentada
+solo en la ejecución); el split IS/OOS con embargo se aprueba (D-069) sin recalibrar nada; la
+guardia de OneDrive ya estaba resuelta por diseño (raíz de datos real `trinity_data`, fuera de
+OneDrive y sin ReparsePoint); y los failure modes salen gratis del `reason_tally` de
+`evaluate_gate` (D-070). El veredicto no se filtra por métrica: se entrega con los DOS modelos de
+fill y los números completos (n, win, exp en pips y USD).
+
+### D-069 - Split IS/OOS 60/30 con embargo de 24 h y ventanas de roll medidas sobre la propia cinta
+
+90 días de trades: 6EU6 (trimestal de septiembre) + 6EZ6 (diciembre). El roll se detecta en la
+cinta, no se impone: el cruce de volumen ocurre el 2026-09-11 (6EU6 5.657 trades vs 6EZ6 30.639
+ese día), así que `ROLL_TS = 2026-09-11T00:00:00Z`; antes se usa 6EU6 y desde ahí 6EZ6, y la cola
+del contrato viejo y la cabeza del nuevo en transición se DESCARTAN (mezclarlos en la misma vela
+no es un precio limpio). Los setups que se INICIAN en `[2026-09-10T00:00Z, 2026-09-12T00:00Z)`
+(solo 48 h, roll por exclusión sin offsets artificiales) se cuentan como EXCLUIDOS, no como
+rechazos. Día degradado según Databento: `2026-08-29` (en IS, documentado en el sidecar). El split:
+IS `[2026-07-08 00:00Z, 2026-09-06 00:00Z)` (60 días, contiene el degradado), embargo
+`[2026-09-06, 2026-09-07)` (solo contexto, sin setups) y OOS `[2026-09-07 00:00Z, fin)` (~30 días,
+contiene el roll). Única calibración permitida: `sl_distance_by_symbol["6E"] = 0.0012`, ajustado
+SOLO con datos IS y con el origen marcado `symbol`; el resto (min_score 59.5, pesos, TTL 40) son
+los de `strategy.yaml` sin tocar.
+
+### D-070 - Los failure modes salen del `reason_tally` del gate, y el veredicto NO convalida la estrategia
+
+Los motivos de rechazo del gate (`reason_tally` de `evaluate_gate`: fuera de killzone, score bajo,
+RR, etc.) son los failure modes del operador, sin ningún detector extra: 5.404 setups detectados,
+693 aprobados; rechazos top: fuera de killzone 3.988 (~74 %) y luego "score < 59.5" (con killzone
+en peso 0.0, el score efectivo del gate es ~70/85 = 82 %, fiel al runtime). Resultados finales
+(min_score 59.5, SL 12 pips, fricción 1 pip adversa a entrada y salida, 1 contrato 6E = 25
+USD/pip): **`zone_ttl`** (canónico) IS 43 trades, win 20.9 %, exp −6.465 pips (−6.950 USD); OOS 23
+trades, win 39.1 %, exp +0.087 pips (+50 USD, PF 1.01). **`next_open`** (cota superior simplificada)
+IS 105 trades, win 47.6 %, exp −3.714 pips; OOS 51 trades, win 49.0 %, exp −4.196 pips (−5.350
+USD). Sin edge positivo en OOS bajo NINGÚN modelo de fill: la esperanza no supera la fricción de 1
+pip más la mecánica de fills. El sesgo de dirección cambia de signo entre IS (25 BUY/18 SELL) y
+OOS (3 BUY/20 SELL, 29 % BUY): sesgo de tendencia del periodo, no del sistema. Cierres: 48 SL / 18
+TP. **La estrategia NO se convalida** con esta calibración mínima; el pipeline queda reproducible
+(`research/build_6e_candles.py` + `research/backtest_6e.py`) para revalidar tras cambios en el
+gate o en la mecánica de fills.
+
+# ARQUITECTURA MULTI-ESTRATEGIA (2026-10-06) — CTA Swing + Mean Reversion + Copilot + ILOF
+
+### D-071 - Convalidación antes que conexión: el roadmap multi-estrategia se aprueba, y ninguna estrategia nueva se ejecuta en vivo sin veredicto OOS
+
+Veredicto del operador, incorporado íntegro (4 opciones recomendadas) y aceptado: (1) Fase 0 =
+cierre limpio de 6E solo administrativo —commit + documentación de `research/`—, sin deploy a
+demo; **rotar la API key de Databento queda pendiente por decisión del usuario (se deja como
+está)**. (2) ILOF entra en la arquitectura como "módulo presente en investigación": su veredicto
+NO convalida no bloquea la infraestructura multi-perfil, y la revalidación se hace aislada en
+`research/` más adelante. (3) Config por perfil: `strategy_<perfil>.yaml` + `strategy_map`
+(magic→perfil), aprovechando que `STRATEGY_PATH` ya es una variable de entorno
+(`core/paths.py:41`) y ampliando `sl_distance_by_symbol` a `by_profile_by_symbol`; un YAML único
+haría que los killzones/TTL intradía contaminaran al CTA D1 en silencio. (4) Datos del CTA:
+OHLCV D1/H4 de MT5 demo (`copy_rates`) sobre EURUSD/XAUUSD/US500/GBPUSD/AUDUSD, gratuito y
+suficiente para tendencias; Databento queda SOLO para microestructura intradía (M1/M15). Los
+cinco principios innegociables: `ExecutionService` sigue siendo la única puerta de salida (la
+aduana de capital no se bifurca); `regime()` (`core/risk_engine.py:126`) es el árbitro de
+desactivación mutua (expansión→ILOF+CTA, compresión→VWAP, noticias→solo Copilot); cada módulo
+entra por `research/` con split IS/OOS + embargo + fricción (el pipeline de `backtest_6e.py`);
+el despliegue nuevo empieza en modo alerta/simulado (`auto_execute=false`, D-063) y solo después
+en vivo; la suite en verde (1477 passed, 2 xfailed) es el criterio primario de aceptación por
+commit. Fases: F0 cierre 6E, F1 infraestructura multi-perfil (strategy_map + DD por magic en
+`daily_risk_state`), F2 convalidación CTA, F3 convalidación VWAP + régimen como interruptor, F4
+despliegue en alerta, F5 ejecución multi-estrategia (nuevo `core/exit_policy.py` para trailing
+D1, gates evalúan el plan de cada perfil). Detalle en `ROADMAP.md` y `CHECKLIST.md`.

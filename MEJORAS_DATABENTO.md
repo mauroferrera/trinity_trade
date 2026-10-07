@@ -195,7 +195,49 @@ Conocidos y ya manejados en `research/fetch_databento.py`:
 
 ---
 
-## 7. Pendiente
+## 7. Backtest de convalidación de la estrategia sobre 6E (2026-10-06)
+
+Cierre del hito transversal (D-068..D-070): el gate (SMC + CVD + killzones + SMR) se convalidó
+sobre 90 días de cinta real con el MISMO código del runtime (`smc_engine.analyze` →
+`risk_engine.setup_score` → `setup_gate.evaluate_gate`), sin `sim.py` de REF.
+
+**Cinta y unión del roll** (ficheros en `trinity_data`, fuera del repo):
+
+| elemento | valor |
+|---|---|
+| descarga | 2,49 USD, 2 parquets raw: `6EU6` (1.343.300 trades, jul-ago) + `6EZ6` (646.492, sep-oct) |
+| roll real | cruce de volumen del 2026-09-11 (5.657 vs 30.639 ese día) → `ROLL_TS = 2026-09-11T00:00Z` |
+| resto | cola del contrato viejo y cabeza del nuevo se descartan; día degradado `2026-08-29` documentado |
+| salida | `databento/candles/6E_M15_2026-07-08_2026-10-06.parquet` (5.888 barras M15 + `delta` + `pdh/pdl`) |
+
+**Split y calibración** (D-069): IS `[2026-07-08, 2026-09-06)` (60 días), embargo `[2026-09-06,
+2026-09-07)`, OOS `[2026-09-07, fin)` (~30 días, contiene el roll). Única calibración:
+`sl_distance_by_symbol["6E"] = 0.0012` con datos IS; min_score 59.5, pesos y TTL 40 son de
+`strategy.yaml` sin tocar. Setups iniciados en `[2026-09-10T00:00Z, 2026-09-12T00:00Z)` →
+excluidos, no rechazos.
+
+**Veredicto: NO convalidada** (D-070) — fricción 1 pip adversa, 1 contrato = 25 USD/pip,
+`max_trades_day` 3 por fill:
+
+| modelo de fill | periodo | n | win % | exp (pips) | exp (USD) |
+|---|---|---|---|---|---|
+| `zone_ttl` (canónico, LIMIT + TTL 40 min) | IS | 43 | 20,9 % | **−6,465** | −6.950 |
+| `zone_ttl` | OOS | 23 | 39,1 % | +0,087 | +50 |
+| `next_open` (cota superior) | IS | 105 | 47,6 % | −3,714 | — |
+| `next_open` | OOS | 51 | 49,0 % | **−4,196** | −5.350 |
+
+Sin edge positivo en OOS bajo ningún modelo de fill. Sesgo de dirección: IS 25 BUY/18 SELL vs
+OOS 3 BUY/20 SELL (29 % BUY) = sesgo de tendencia del periodo, no del sistema. Rechazos: 5.404
+detectados, 693 aprobados; ~74 % fuera de killzone (peso killzone 0.0 en la config vigente), luego
+score < 59.5. Resultado completo en
+`trinity_data/research/results/backtest_6e_20261006T231756Z.json`.
+
+Regenerable sin volver a pagar: `python research/build_6e_candles.py` (velas) +
+`python research/backtest_6e.py` (veredicto).
+
+---
+
+## 8. Pendiente
 
 - **Rotar la clave de Databento.** Se pegó en texto plano en una conversación
   antes de pasarla a `.env`. La rotación es de la cuenta, no del repo.
