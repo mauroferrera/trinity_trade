@@ -199,7 +199,7 @@ Ver `DECISIONS.md` (D-005) y `PROJECT_STATE.json` (`reference_code`).
 - [ ] Revalidación futura si cambian el gate o la mecánica de fills (pipeline reproducible)
 
 ## Hoja de ruta multi-estrategia (D-071) — CTA Swing + Mean Reversion + Copilot + ILOF
-**Estado:** F0, F1 y F2 entregadas (2026-10-06) | **Prioridad:** Media-alta (después de cerrar 6E)
+**Estado:** F0–F4 entregadas (2026-10-07) | **Prioridad:** Media-alta (después de cerrar 6E)
 
 Principios (no negociables): convalidación antes que conexión (nada en vivo sin veredicto OOS);
 `ExecutionService` = única puerta de salida; `regime()` = árbitro de desactivación mutua; los
@@ -234,8 +234,15 @@ suite en verde como criterio de aceptación.
   validaron contra datos reales (su test solo asserta "que corra"); decisión del operador,
   no se toca `core/`. Suite `1555 passed, 2 xfailed`. Detalle en `MEJORAS_MR_VWAP.md`.
               **Gate de la F3: solo pasa si OOS supera la fricción → NO CONVALIDA.**
-- [ ] **F4 – Despliegue en alerta**: módulos validados corren simulados con su magic y perfil.
-  Cero órdenes reales.
+- [x] **F4 – Despliegue en alerta** (D-077): el CTA convalidado corre en modo alerta con
+  magic `8882027` y perfil propio `config/strategy_cta.yaml`; servicio
+  `api/services/cta_alert_service.py` (motor de F2 vía `research/cta.py`, dedup en memoria
+  por (símbolo, barra de señal), fila en `setup_log` con `dry_run: true`), rutas
+  `GET /api/cta/status` (sin token) + `POST /api/cta/scan` (token), fuera del ciclo del
+  watcher (D1 vs M15). Cero órdenes **estructurales**: el servicio no importa
+  `ExecutionService` (assertado por AST). `core/` intacto salvo `STRATEGY_CTA_PATH`.
+  Tests: 37 servicio + 21 source + 7 integration (66 nuevos). Suite `1621 passed,
+  2 xfailed`.
 - [ ] **F5 – Ejecución multi-estrategia**: activación vía `ExecutionService` con plan y `exit_policy`
   por perfil (nuevo `core/exit_policy.py` para trailing D1); Copilot manual siempre abierto.
 

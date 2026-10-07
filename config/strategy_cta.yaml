@@ -1,0 +1,29 @@
+# Perfil del CTA Swing D1 (F4, D-077): la estrategia convalidada en F2 (D-073/D-074)
+# con su magic, sus símbolos y su motor. Un fichero aparte de strategy.yaml porque es
+# OTRA estrategia con OTRA cadencia (D1, no M15) y OTRA vida: aquí se decide qué
+# evalúa el modo alerta, no qué hace la ejecución.
+#
+# El servicio (api/services/cta_alert_service.py) es el único consumidor. Si el fichero
+# no existe, el perfil sale vacío y el servicio queda deshabilitado CON MOTIVO; si está
+# mal formado, settings/strategy_cta_source.py lanza StrategyConfigError (un default
+# silencioso aquí encendería una estrategia que nadie configuró).
+#
+# Los parámetros del engine son los clásicos fijados en F2 SIN recalibrar (D-073):
+# ATR 14 (Wilder), Donchian 20, chandelier k=3.0. No hay vol-target aquí: el sizing
+# es de ejecución y llega con F5.
+
+enabled: true
+magic: 8882027
+comment: "Trinity CTA D1"
+timeframe: D1
+bars: 120
+symbols:
+  - EURUSD
+  - XAUUSD
+  - US500
+  - GBPUSD
+  - AUDUSD
+engine:
+  atr_n: 14
+  don_n: 20
+  mult: 3.0

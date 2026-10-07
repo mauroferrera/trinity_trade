@@ -1,4 +1,4 @@
-"""Routers de la API: health, market, agent, journal, orderflow, macro, setup, trading y watcher.
+"""Routers de la API: health, market, agent, journal, orderflow, macro, setup, trading, watcher y cta.
 
 Un router por dominio. Sin logica de negocio: solo validar, delegar y serializar.
 Cada modulo se importa por su nombre desde `api/app.py` para que un `SyntaxError`
@@ -48,6 +48,13 @@ audita, y no manda ordenes (D-063). El calculo esta en `core/setup_lifecycle.py`
 orquestacion en `api/services/watcher_service.py`. Cuando el auto-arranque entre
 entra por `ExecutionService`, no por codigo propio aqui.
 
+Las dos del CTA en alerta (`/api/cta/status`, `/api/cta/scan`) las sirve
+`api/routes/cta.py` (F4, D-077): el CTA Swing D1 evalua su breakout con
+`research/cta.py` y audita en `setup_log` con magic 8882027 y `trade_result
+{executed: false}`. No hay ruta de auto-execute porque no hay interruptor que
+encender: las cero ordenes son estructurales, y la ejecucion multi-estrategia es F5
+(`api/services/cta_alert_service.py`).
+
 Sobre el orden de las rutas literales
 -------------------------------------
 `/api/journal/{jid}` con `jid: int` se traga `/api/journal/overlay` y devuelve un
@@ -56,4 +63,4 @@ Sobre el orden de las rutas literales
 registro. Lo mismo con `/api/analysis/chartism/{symbol}` frente a `/{symbol}`.
 """
 
-__all__ = ["agent", "health", "journal", "macro", "market", "orderflow", "setup", "trading", "watcher"]
+__all__ = ["agent", "cta", "health", "journal", "macro", "market", "orderflow", "setup", "trading", "watcher"]

@@ -599,5 +599,36 @@ superen la convalidación OOS (nada más correcto que el backtest para decidirlo
 - Suite completa tras F3: **1555 passed, 2 xfailed** (antes de F3: 1537).
 - Validación: `py_compile` OK; ruff no instalado en el entorno (suite + `py_compile`).
 
-**Siguiente fase:** F4 – despliegue en alerta (el CTA convalidado en F2 corre simulado; el MR
-VWAP queda fuera por no convalidar).
+### Sub-hito "F4 – Despliegue en alerta del CTA" (cerrado, D-077)
+
+**Fecha:** 2026-10-07 | **Estado:** entregado en verde; cero órdenes reales (estructural,
+no por bandera), `core/` intacto salvo `STRATEGY_CTA_PATH`.
+
+- `config/strategy_cta.yaml` (perfil propio: enabled, magic `8882027`, D1, engine
+  atr_n=14 / don_n=20 / mult=3.0 — parámetros clásicos de F2, sin recalibrar) +
+  `config/strategy_map.yaml` con `8882027: cta`; `core/paths.py` crece `STRATEGY_CTA_PATH`.
+- `settings/strategy_cta_source.py`: lector cacheado por firma mtime+tamaño; ausente →
+  perfil vacío y servicio deshabilitado CON MOTIVO; YAML roto → `StrategyConfigError`
+  (nunca default silencioso). Va en `settings/` para no crecer `ConfigSource`.
+- `api/services/cta_alert_service.py`: importa `research/cta.py` (autorizado en D-077,
+  solo camino de alerta), regla anti-lookahead (última barra cerrada si `i+1` existe o
+  `ahora >= time + 25 h`), fill = open de la barra formante, `sl = chandelier(k=3.0)`,
+  dedup en memoria por (símbolo, barra de señal), fila `setup_log` con
+  `trade_result {executed: false, dry_run: true, mode: "alert"}` y
+  `context {magic, profile, comment}`. NO importa `ExecutionService` (assertado por AST:
+  cero "execution" y cero `order_send`).
+- `api/routes/cta.py`: `GET /api/cta/status` (sin token) + `POST /api/cta/scan` (token),
+  fuera del ciclo del watcher (D1 vs M15); wiring en `Runtime.cta_service()` (lazy,
+  `set_market` lo resetea) y `api/app.py`.
+- Tests nuevos (**66**): `test_cta_alert_service.py` (37: estado, escaneo, dedup,
+  auditoría, cero órdenes por AST, firma del ctor, rutas), `test_strategy_cta_source.py`
+  (21: 13 parametrizaciones de `StrategyConfigError` con el campo culpable, copia
+  profunda, ausente→`{}`), integration `TestCtaCompartido` + `TestRutasCta` (7: perfil
+  real 5 símbolos → 5 filas, 2º scan → dedup 5, mercado caído → filas `error` sin 500,
+  `auto-execute` → 404, OpenAPI con ambas rutas). Fixes en `test_strategy_map.py:68` y
+  `test_store.py:186` (+8882027).
+- Suite completa tras F4: **1621 passed, 2 xfailed** (antes de F4: 1555).
+- Validación: `py_compile` OK; ruff no instalado en el entorno (suite + `py_compile`).
+
+**Siguiente fase:** F5 – ejecución multi-estrategia (`core/exit_policy.py` para trailing
+D1, activación vía `ExecutionService`; el MR VWAP sigue fuera por no convalidar).

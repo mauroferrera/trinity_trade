@@ -1306,3 +1306,62 @@ estrategia (D-065). Efecto en el roadmap: F4/F5 (CTA en alerta) no se ven afecta
 gate en vivo que lo discuta. Registro: `MEJORAS_MR_VWAP.md`,
 ROADMAP/CHECKLIST/PROJECT_STATE. Suite completa tras F3: **1555 passed, 2 xfailed**
 (antes de F3: 1537).
+
+### D-077 - F4: el CTA Swing D1 despliega en MODO ALERTA con su magic (8882027) y su perfil propio; cero órdenes reales
+
+F2 convalidó el CTA (D-073/D-074, PASS) y F3 dejó el MR VWAP fuera (D-076). F4 conecta
+el motor convalidado en el camino de ALERTA —no en el de ejecución— y la regla de oro
+"research/ no se consume en ejecución" queda **autorizada explícitamente para esta sola
+ruta**: `api/services/cta_alert_service.py` importa `research/cta.py` (atr, donchian,
+breakout_signals, chandelier) porque evaluar y auditar no es ejecutar; el consumo en
+ejecución sigue prohibido hasta F5. Tres forks decididos por el operador:
+
+1. **Nivel de simulación: "Alerta + auditoría"** (estilo watcher). El servicio evalúa
+   D1, deduplica y escribe fila en `setup_log` con su magic/perfil y
+   `trade_result {executed: false, dry_run: true, mode: "alert"}`. **NO toca
+   `ExecutionService`**: no existe camino de órdenes, así que las cero órdenes son
+   estructurales, no una bandera. La conexión a ejecución real es F5.
+2. **Magic del CTA = 8882027** → `config/strategy_map.yaml: 8882027: cta`. Cada scan
+   verifica la consistencia con `strategy_map.profile_for_magic(magic, mapa) == "cta"`;
+   si el magic no está en el mapa (resuelve "default") el scan sale deshabilitado con el
+   motivo explícito en vez de operar con reglas ajenas.
+3. **Servicio y rutas propios**: `api/services/cta_alert_service.py` +
+   `GET /api/cta/status` (lectura, sin token) y `POST /api/cta/scan` (escritura, token),
+   espejo del watcher. NO se integra en el ciclo del watcher: el CTA decide en D1 y el
+   watcher en M15 — dos cadencias en un bucle solo acoplan ritmos que nada comparte.
+
+Perfil propio `config/strategy_cta.yaml` (enabled, magic, comment, timeframe D1, bars,
+símbolos, engine atr_n=14 / don_n=20 / mult=3.0 — parámetros clásicos de F2, sin
+recalibrar) leído por `settings/strategy_cta_source.py` (cache por firma mtime+tamaño;
+ausente → perfil vacío y servicio deshabilitado CON MOTIVO; YAML roto →
+`StrategyConfigError`, nunca un default silencioso). El lector va en `settings/` y no en
+`store`: `ConfigSource` no crece un método más, y el servicio inyecta los callables de
+config (tests sin tocar el seam).
+
+**Regla de barras cerradas (anti-lookahead)**: el último elemento de
+`market.candles(sym, "D1", n)` es la barra EN FORMACIÓN (`copy_rates_from_pos(...,0,n)`).
+Barra `i` está cerrada si existe `i+1`; la última se da por cerrada SOLO si
+`ahora >= time + 25 h` (margen por DST: decide TARDE, nunca temprano — así el fin de
+semana la última barra del viernes acaba contando como cerrada). La señal es el breakout
+de la **última barra cerrada** con `research/cta.py` sobre SOLO las cerradas, y el fill es
+el open de la barra formante (next-open, misma convención que la convalidación); si no
+hay formante, el close de la última cerrada. Fila: `entry` = ese fill,
+`sl = cta.chandelier(dir, entry, atr, 3.0)`, `target`/`invalidate_level` = None (el
+trailing D1 es F5), `score` = 0.0 (el CTA no tiene score; los detalles van en
+`breakdown`), `verdict` = `CTA_BREAKOUT`, `source` = `cta_alert`, `direction` = BUY/SELL
+—el motor da long/short y `setup_log` vive en BUY/SELL (`store.py:824`,
+`risk_engine`)—, `context` = `{magic, profile, comment}`. Dedup **en memoria** por
+(símbolo, tiempo de la barra de señal), igual que `WatcherService._rejects`: un
+reinicio del proceso reescribe la fila, ruido aceptable; NO se usa `setup_state` porque
+su TTL es de minutos y esto es D1. Sin gate de noticias (se aplica en ejecución, F5);
+`risk_state` va informativo. `regime()` no gatea nada (D-076: siempre "expansión" →
+CTA habilitado). `core/` NO se toca salvo la constante `STRATEGY_CTA_PATH` en
+`core/paths.py`. Rutas: `/api/cta/*` se documentan en prosa en
+`api/routes/__init__.py` (el test de contrato solo exige las rutas que pide el JS).
+Registro: ROADMAP/CHECKLIST/PROJECT_STATE. **Implementado 2026-10-07**: ficheros
+`config/strategy_cta.yaml`, `config/strategy_map.yaml` (+8882027), `core/paths.py`
+(+`STRATEGY_CTA_PATH`), `settings/strategy_cta_source.py`,
+`api/services/cta_alert_service.py`, `api/routes/cta.py`, wiring en
+`api/runtime.py`/`api/app.py`/`api/routes/__init__.py`. Tests **+66** (37 servicio,
+21 source, 7 integration) → suite `1621 passed, 2 xfailed` (antes: 1555). Cero órdenes
+verificado por AST y por `auto-execute → 404`.

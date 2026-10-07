@@ -1,10 +1,11 @@
 # Mapa de estrategias: magic con el que sale una orden -> perfil de reglas.
 #
 # Cada entrada dice qué `strategy<perfil>.yaml` define las reglas de un magic.
-# "default" es el `strategy.yaml` histórico (perfil único). F1 mantiene SOLO esa
-# entrada: las estrategias nuevas (ILOF M15, CTA Swing, Mean Reversion, Copilot)
-# añadirán su magic AQUÍ Y EN SUS TESTS antes de tocar la ejecución, regla de
-# oro de la hoja de ruta (D-071).
+# "default" es el `strategy.yaml` histórico (perfil único). F1 nació con SOLO esa
+# entrada; F4 (D-077) añade el magic del CTA Swing D1 convalidado en F2, que corre
+# en modo alerta con su perfil (`strategy_cta.yaml`). Las estrategias que falten
+# (ILOF M15, Mean Reversion, Copilot) añaden su magic AQUÍ Y EN SUS TESTS antes de
+# tocar la ejecución, regla de oro de la hoja de ruta (D-071).
 #
 # Reglas de validación (core/strategy_map.py):
 #   - magic entero > 0.
@@ -13,3 +14,4 @@
 # Un magic que no esté aquí resuelve a "default".
 map:
   8882026: default
+  8882027: cta

@@ -49,6 +49,13 @@ STRATEGY_MAP_PATH = os.environ.get(
     "STRATEGY_MAP_PATH", os.path.join(CONFIG_DIR, "strategy_map.yaml")
 )
 
+# strategy_cta.yaml -> perfil propio del CTA Swing D1 (F4, D-077). Mismo motivo
+# que el mapa: otra estrategia, otra cadencia (D1), otro fichero. Su lector es
+# settings/strategy_cta_source.py, con las mismas reglas que el de strategy.
+STRATEGY_CTA_PATH = os.environ.get(
+    "STRATEGY_CTA_PATH", os.path.join(CONFIG_DIR, "strategy_cta.yaml")
+)
+
 # --- Persistencia ------------------------------------------------------------
 
 # El activo más valioso del proyecto: de aquí salen el post-mortem, los win-rate

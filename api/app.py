@@ -44,7 +44,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import errors
 from .deps import ALLOWED_ORIGINS_ENV, origins
-from .routes import agent, health, journal, macro, market, orderflow, setup, trading, watcher
+from .routes import agent, cta, health, journal, macro, market, orderflow, setup, trading, watcher
 from .runtime import Runtime
 
 #: Título y versión. La versión va en el título porque es la forma más barata de
@@ -94,7 +94,7 @@ def create_app(runtime: Optional[Runtime] = None) -> FastAPI:
     _instala_cors(app)
     _instala_tiempos(app)
 
-    for modulo in (health, market, agent, journal, orderflow, macro, setup, trading, watcher):
+    for modulo in (health, market, agent, journal, orderflow, macro, setup, trading, watcher, cta):
         app.include_router(modulo.router)
 
     _monta_estaticos(app)

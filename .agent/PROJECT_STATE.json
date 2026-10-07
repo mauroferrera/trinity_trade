@@ -764,7 +764,7 @@
       "F1 - Infraestructura multi-perfil: strategy_map (magic->perfil), strategy_<perfil>.yaml via STRATEGY_PATH, sl_distance_by_symbol -> by_profile_by_symbol, daily_risk_state con DD/topes por magic y global; ILOF = modulo presente en investigacion",
       "F2 - Convalidacion CTA en research/: OHLCV D1 de MT5 demo (EURUSD, XAUUSD, US500, GBPUSD, AUDUSD, ~4,7 anios), breakout proximo-open + trailing ATR + vol-targeting en lot_calculator; GATE cumplido (OOS supera la friccion) -> CONVALIDA, Veredicto PASS (D-074)",
       "F3 - Convalidacion Mean Reversion (VWAP) (D-075/D-076): mismo dataset y proceso que F2, motor puro research/mr.py (VWAP 20 + bandas 2*ATR, target=VWAP, max_hold 10) con regime() como interruptor -> NO CONVALIDADO: 0 fills con el gate porque regime() devuelve 'expansion' SIEMPRE (D1 y M15), y sin gate no supera la friccion (OOS 120 trades, PF 0.968, -406 ticks)",
-      "F4 - Despliegue en alerta: modulos validados corren simulados con su magic y perfil, cero ordenes reales",
+      "F4 - Despliegue en alerta ENTREGADO (D-077): CTA en modo alerta con magic 8882027 y perfil propio strategy_cta.yaml, servicio cta_alert_service.py + rutas GET /api/cta/status y POST /api/cta/scan fuera del ciclo del watcher, cero ordenes reales estructurales (no importa ExecutionService, assertado por AST); core/ intacto salvo STRATEGY_CTA_PATH",
       "F5 - Ejecucion multi-estrategia: activacion via ExecutionService con plan y exit_policy por perfil (nuevo core/exit_policy.py para trailing D1); Copilot manual siempre abierto"
     ],
     "datos_cta": "MT5 demo copy_rates (gratis, sufuciente para D1/H4); Databento SOLO para microestructura intradia (M1/M15)"
@@ -914,5 +914,47 @@
     ],
     "resultado_json": "trinity_data/research/results/backtest_mr_20261007T131624Z.json",
     "pendiente_f3": "deuda regime() (umbrales sin validar contra datos) + clave Databento (usuario); MR se revalidaria si cambian sus parametros o el interruptor"
+  },
+  "f4_alerta": {
+    "hito": "F4 - Despliegue en alerta del CTA Swing D1 (magic 8882027, perfil propio, cero ordenes reales)",
+    "fecha": "2026-10-07",
+    "estado": "entregado en verde; cero ordenes estructurales (el servicio NO importa ExecutionService); core/ intacto salvo STRATEGY_CTA_PATH",
+    "decisiones": [
+      "D-071 (roadmap)",
+      "D-077 (diseno: alerta+auditoria estilo watcher, magic 8882027, rutas propias fuera del ciclo del watcher; autoriza research/cta.py SOLO en el camino de alerta)"
+    ],
+    "config": {
+      "perfil": "config/strategy_cta.yaml (enabled, magic 8882027, D1, engine atr_n=14 / don_n=20 / mult=3.0, parametros de F2 sin recalibrar)",
+      "mapa": "config/strategy_map.yaml +8882027: cta; profile_for_magic(8882027) == 'cta', si no -> scan deshabilitado con motivo",
+      "paths": "core/paths.py STRATEGY_CTA_PATH (env STRATEGY_CTA_PATH) - unico toque en core/"
+    },
+    "servicio": {
+      "archivo": "api/services/cta_alert_service.py",
+      "motor": "research/cta.py (atr, donchian, breakout_signals, chandelier) - autorizado en D-077 solo para evaluar/auditar",
+      "barras_cerradas": "barra i cerrada si existe i+1; la ultima solo si ahora >= time + 25h (margen DST, decide tarde nunca temprano)",
+      "fill": "open de la barra formante (next-open); si no hay formante, close de la ultima cerrada",
+      "fila": "sl = chandelier(k=3.0), target/invalidate = None (trailing D1 es F5), score 0.0, verdict CTA_BREAKOUT, source cta_alert, direction BUY/SELL (motor da long/short, setup_log vive en BUY/SELL)",
+      "dedup": "en memoria por (simbolo, tiempo de la barra de senal); NO usa setup_state (TTL de minutos, esto es D1)",
+      "cero_ordenes": "servicio y rutas no importan execution ni llaman order_send (assertado por AST en tests)"
+    },
+    "rutas": [
+      "GET /api/cta/status (lectura, sin token)",
+      "POST /api/cta/scan (escritura, token)",
+      "ambas fuera del ciclo del watcher: CTA decide en D1, watcher en M15 (dos cadenas en un solo bucle acoplan ritmos que nada comparte)"
+    ],
+    "lector": "settings/strategy_cta_source.py (firma mtime+tamano; ausente -> perfil vacio y deshabilitado CON MOTIVO; roto -> StrategyConfigError); en settings/ para no crecer ConfigSource",
+    "suite": "1621 passed, 2 xfailed (antes de F4: 1555 passed, 2 xfailed; +66 nuevos)",
+    "tests": [
+      "tests/unit/test_cta_alert_service.py (37: estado, escaneo, dedup, auditoria, cero ordenes por AST, firma del ctor, rutas)",
+      "tests/unit/test_strategy_cta_source.py (21: 13 parametrizaciones de StrategyConfigError con el campo culpable, copia profunda, ausente->{})",
+      "tests/integration/test_api_routes.py: TestCtaCompartido + TestRutasCta (7: perfil real 5 simbolos -> 5 filas, 2a scan -> dedup 5, mercado caido -> filas error sin 500, auto-execute -> 404, OpenAPI con ambas rutas)",
+      "fixes: test_strategy_map.py:68 y test_store.py:186 (+8882027: cta)"
+    ],
+    "validacion": [
+      "py_compile OK",
+      "core/ solo STRATEGY_CTA_PATH (test_core_purity en verde)",
+      "ruff NO instalado en el entorno; validacion via suite + py_compile"
+    ],
+    "pendiente_f4": "auto_execute no existe en las rutas CTA (404 a proposito): conectarlo a ExecutionService es F5; MR VWAP sigue fuera (D-076)"
   }
 }

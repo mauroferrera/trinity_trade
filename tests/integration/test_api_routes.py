@@ -585,6 +585,8 @@ class TestHealth:
             "/api/orderflow",
             "/api/agent/message",
             "/api/agent/roles",
+            "/api/cta/status",
+            "/api/cta/scan",
         ):
             assert esperada in rutas, "falta la ruta {0}".format(esperada)
 
@@ -1569,6 +1571,177 @@ class TestWatcherCompartido:
         nuevo = rt.watcher_service()
         assert nuevo is not servicio
         assert nuevo._rejects == {}
+
+
+# ---------------------------------------------------------------------------
+# CTA Swing D1 en alerta (F4, D-077)
+# ---------------------------------------------------------------------------
+
+
+def _velas_cta(n_cerradas: int = 29) -> List[Dict[str, Any]]:
+    """Serie D1 sintética con breakout en la última barra, como en los unit.
+
+    Los tiempos son de 2023 a propósito: con el reloj de HOY, todas las barras
+    (incluida la última) cuentan como cerradas y el fill es el close. Las reglas
+    de "formante vs cerrada" se prueban con reloj controlado en
+    `tests/unit/test_cta_alert_service.py`; aquí lo que importa es que el scan
+    encuentre UNA señal y escriba UNA fila por símbolo, sea cual sea la fecha en
+    que corra la suite.
+    """
+    dia = 86400
+    t0 = 1_700_000_000
+    serie: List[Dict[str, Any]] = []
+    for k in range(n_cerradas):
+        base = 1.0 + 0.0005 * k
+        if k == n_cerradas - 1:
+            serie.append({"time": t0 + k * dia, "open": base, "high": 1.05,
+                          "low": base - 0.001, "close": 1.05, "volume": 1})
+        else:
+            serie.append({"time": t0 + k * dia, "open": base,
+                          "high": base + 0.001, "low": base - 0.001,
+                          "close": base + 0.0004, "volume": 1})
+    serie.append({"time": t0 + n_cerradas * dia, "open": 1.0502, "high": 1.051,
+                  "low": 1.049, "close": 1.0505, "volume": 1})
+    return serie
+
+
+class TestCtaCompartido:
+    """Dónde vive el servicio del CTA: la dedup D1 tiene que durar más que una
+    petición, igual que la del watcher."""
+
+    def test_el_servicio_es_el_mismo_entre_llamadas(self):
+        rt = Runtime(market=FakeMarket(), store=FakeStore())
+
+        assert rt.cta is None
+        primero = rt.cta_service()
+        assert rt.cta_service() is primero
+
+    def test_cambiar_el_mercado_suelta_el_cta(self):
+        """Escanea contra el mercado VIEJO y se haría el vivo; se prefiere
+        perder la dedup (un par de filas de más) que mirar el sitio equivocado."""
+        rt = Runtime(market=FakeMarket(), store=FakeStore())
+        servicio = rt.cta_service()
+        servicio._alertas["EURUSD"] = 1_700_000_000
+
+        rt.set_market(FakeMarket())
+
+        nuevo = rt.cta_service()
+        assert nuevo is not servicio
+        assert nuevo._alertas == {}
+
+
+class TestRutasCta:
+    """Las dos rutas del CTA: lectura sin token, escritura con él, cero órdenes."""
+
+    def test_status_es_lectura_sin_token_y_con_el_perfil_real(self, cliente):
+        """`/api/cta/status` lee `config/strategy_cta.yaml` DESPLEGADO (F4).
+
+        Sin token (es lectura) y sin base de datos: el perfil no vive en la BD.
+        El magic y el perfil que salen aquí son los del fichero real, no un doble:
+        si alguien edita el YAML y rompe la forma, este test lo dice.
+        """
+        r = cliente.get("/api/cta/status")
+
+        assert r.status_code == 200
+        estado = r.json()
+        assert estado["enabled"] is True
+        assert estado["profile"] == "cta"
+        assert estado["magic"] == 8882027
+        assert estado["timeframe"] == "D1"
+        assert "EURUSD" in estado["symbols"]
+        assert estado["auto_execute"] is False
+        assert estado["auto_execute_disponible"] is False
+        assert estado["dry_run"] is True
+
+    def test_scan_sin_token_es_401(self, db, monkeypatch):
+        """Escribe en `setup_log`, así que es una escritura aunque no mande
+        órdenes: quien puede auditar operaciones es quien puede operar."""
+        monkeypatch.setenv("API_TOKEN", "secreto")
+        app = create_app(_runtime(market=FakeMarket(velas=_velas_cta()),
+                                  store=db))
+        with TestClient(app) as c:
+            r = c.post("/api/cta/scan")
+
+        assert r.status_code == 401
+        assert r.json()["detail"] == "token inválido o ausente"
+
+    def test_scan_con_token_audita_en_setup_log_y_deduplica(self, db, monkeypatch):
+        """El ciclo completo contra la base VERDADERA (temporal).
+
+        Los cinco símbolos del perfil real alertan y escriben cinco filas; el
+        segundo POST no escribe ninguna porque la dedup vive en el servicio, no
+        en la ruta — si la ruta construyera un servicio nuevo por petición, esta
+        comprobación fallaría con diez filas.
+        """
+        monkeypatch.setenv("API_TOKEN", "secreto")
+        app = create_app(_runtime(market=FakeMarket(velas=_velas_cta()),
+                                  store=db))
+        with TestClient(app) as c:
+            headers = {"X-API-Token": "secreto"}
+            primero = c.post("/api/cta/scan", headers=headers).json()
+            segundo = c.post("/api/cta/scan", headers=headers).json()
+
+        assert primero["enabled"] is True
+        assert primero["auto_ejecute"] is False
+        assert primero["dry_run"] is True
+        assert len(primero["errors"]) == 0
+        assert len(primero["events"]) == 5
+        assert primero["audit_logged"] == 5
+        assert primero["dedup"] == 0
+        assert segundo["dedup"] == 5
+        assert segundo["audit_logged"] == 0
+        assert segundo["events"] == []
+
+        filas = [f for f in db.list_setup_log(limit=50)
+                 if f["source"] == "cta_alert"]
+        assert len(filas) == 5
+        assert {f["symbol"] for f in filas} == {
+            "EURUSD", "XAUUSD", "US500", "GBPUSD", "AUDUSD"}
+        fila = [f for f in filas if f["symbol"] == "EURUSD"][0]
+        assert fila["direction"] == "BUY"
+        assert fila["verdict"] == "CTA_BREAKOUT"
+        assert fila["timeframe"] == "D1"
+        assert fila["trade_result"] == {
+            "executed": False, "dry_run": True, "mode": "alert"}
+        assert fila["context"]["magic"] == 8882027
+        assert fila["context"]["profile"] == "cta"
+        assert fila["breakdown"]["cta"]["direction"] == "long"
+
+    def test_un_mercado_caido_no_tumba_el_scan(self, db, monkeypatch):
+        """Cinco `error` en `errors` y 200 en la respuesta: la ruta no revienta."""
+        monkeypatch.setenv("API_TOKEN", "secreto")
+        app = create_app(_runtime(
+            market=FakeMarket(fallo=RuntimeError("terminal apagado")), store=db))
+        with TestClient(app) as c:
+            cuerpo = c.post("/api/cta/scan",
+                            headers={"X-API-Token": "secreto"}).json()
+
+        assert len(cuerpo["errors"]) == 5
+        assert all(e["error"] == "terminal apagado" for e in cuerpo["errors"])
+        assert cuerpo["audit_logged"] == 0
+        assert cuerpo["events"] == []
+        assert db.list_setup_log(limit=50) == []
+
+    def test_no_hay_ruta_de_auto_execute(self, cliente):
+        """Ni siquiera la pregunta existe: no hay interruptor que encender (D-077).
+
+        El watcher sí la tiene (responde `501` a propósito) porque su interruptor
+        existe y está apagado. Aquí una ruta que simulara un 501 estaría fingiendo
+        que hay un modo de ejecución que aún no se ha construido (es F5).
+        """
+        assert cliente.post("/api/cta/auto-execute", json={}).status_code == 404
+
+    def test_el_estado_refleja_la_dedup_entre_peticiones(self, db, monkeypatch):
+        """La memoria de la alerta es del SERVICIO compartido por la app."""
+        monkeypatch.setenv("API_TOKEN", "secreto")
+        app = create_app(_runtime(market=FakeMarket(velas=_velas_cta()),
+                                  store=db))
+        with TestClient(app) as c:
+            assert c.get("/api/cta/status").json()["alerts"] == {}
+            c.post("/api/cta/scan", headers={"X-API-Token": "secreto"})
+            alertas = c.get("/api/cta/status").json()["alerts"]
+
+        assert set(alertas) == {"EURUSD", "XAUUSD", "US500", "GBPUSD", "AUDUSD"}
 
 
 # ---------------------------------------------------------------------------

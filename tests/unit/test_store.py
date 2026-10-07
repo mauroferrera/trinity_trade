@@ -178,12 +178,13 @@ class TestSeamDeConfiguracion:
     def test_el_default_lee_el_mapa_real(self):
         """Igual que el YAML de strategy: el default tardío materializa el mapa real.
 
-        El mapa tiene una sola entrada (8882026 -> "default") en F1: sin ella, no
-        habría nada que leyera el fichero en producción ni en tests.
+        El mapa tiene las entradas de F1 y F4 (8882026 -> "default",
+        8882027 -> "cta"): sin ellas, no habría nada que leyera el fichero en
+        producción ni en tests.
         """
         source = store._LazyStrategyConfig()
 
-        assert source.strategy_map() == {8882026: "default"}
+        assert source.strategy_map() == {8882026: "default", 8882027: "cta"}
 
     def test_get_strategy_map_delega_en_el_seam(self, db):
         store.get_config_source().mapa = {8882026: "default", 9999001: "cta"}

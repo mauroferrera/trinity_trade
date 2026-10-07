@@ -71,6 +71,7 @@ class Runtime:
         "symbols",
         "execution",
         "watcher",
+        "cta",
         "_deps",
         "_store_backend",
     )
@@ -88,6 +89,7 @@ class Runtime:
         symbols: Optional[Any] = None,
         execution: Optional[Any] = None,
         watcher: Optional[Any] = None,
+        cta: Optional[Any] = None,
     ) -> None:
         from agent.ports import AgentDeps
 
@@ -112,6 +114,9 @@ class Runtime:
         #: vez que alguien lee `/api/watcher/status` o llama a `/api/watcher/scan`, y
         #: se comparte desde ese momento. Ver `watcher_service()`.
         self.watcher = watcher
+        #: Servicio del CTA en alerta (F4, D-077). Mismo trato que el watcher: lazy y
+        #: compartido, porque deduplica las alertas D1 en memoria. Ver `cta_service()`.
+        self.cta = cta
         self._store_backend = "inyectado" if store is not None else None
         # El agente se construye una vez y se comparte: sus anclajes entre
         # llamadas (`AnalysisAnchors`) viven aquí, no en un global.
@@ -202,19 +207,40 @@ class Runtime:
             )
         return self.watcher
 
+    def cta_service(self) -> Any:
+        """El `CtaAlertService` de ESTA app, construido una vez.
+
+        Mismo motivo que `watcher_service()`: deduplica las alertas D1 **en memoria**
+        por (símbolo, barra de señal). Si cada petición construyera su servicio, esa
+        memoria moriría con el `return` y la misma barra reescribiría su fila de
+        `setup_log` en cada llamada. Se construye en el primer uso, no en el arranque:
+        `import Runtime` no toca la config, y el CTA no hace nada solo.
+
+        Si alguien cambia el mercado con `set_market`, el servicio se descarta (igual
+        que el watcher): escanear contra un mercado que ya no está conectado daría
+        `error` en cada símbolo haciéndose el vivo; se prefiere perder la memoria de
+        dedup —un par de filas de más— a mirar el sitio equivocado.
+        """
+        if self.cta is None:
+            from .services.cta_alert_service import CtaAlertService
+
+            self.cta = CtaAlertService(market=self.market, store=self.store)
+        return self.cta
+
     def set_market(self, market: Any) -> None:
         """Cambia el mercado y actualiza los `AgentDeps` sin recrearlos.
 
-        Los anclajes sobreviven: son estado del chat, no de la terminal. Un test
-        que cambia el mercado a mitad de una conversación pierde los datos de
-        mercado, que es lo que quería cambiar, y nada más.
+        Los anclajes sobreviven: son estado del chat, no de la terminal. Un test que
+        cambia el mercado a mitad de una conversación pierde los datos de mercado,
+        que es lo que quería cambiar, y nada más.
 
-        El watcher se suelta con el mercado: su dedup en memoria es de este
-        proceso, y el servicio que la guarda escanearía contra el mercado viejo.
+        Los servicios se sueltan con el mercado: su dedup en memoria es de este
+        proceso, y los que la guardan escanearían contra el mercado viejo.
         """
         self.market = market
         self.symbols = market
         self.watcher = None
+        self.cta = None
         self._deps.market = market
 
     # -- ciclo de vida -----------------------------------------------------------
