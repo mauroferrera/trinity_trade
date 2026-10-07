@@ -1,0 +1,15 @@
+# Mapa de estrategias: magic con el que sale una orden -> perfil de reglas.
+#
+# Cada entrada dice qué `strategy<perfil>.yaml` define las reglas de un magic.
+# "default" es el `strategy.yaml` histórico (perfil único). F1 mantiene SOLO esa
+# entrada: las estrategias nuevas (ILOF M15, CTA Swing, Mean Reversion, Copilot)
+# añadirán su magic AQUÍ Y EN SUS TESTS antes de tocar la ejecución, regla de
+# oro de la hoja de ruta (D-071).
+#
+# Reglas de validación (core/strategy_map.py):
+#   - magic entero > 0.
+#   - perfil texto no vacío.
+#   - 'map' no puede quedar vacío.
+# Un magic que no esté aquí resuelve a "default".
+map:
+  8882026: default

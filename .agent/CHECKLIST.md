@@ -523,3 +523,25 @@ alerta → F5 ejecución multi-estrategia (`core/exit_policy.py`, gates por perf
 
 **Pendiencias abiertas:** rotar la API key de Databento (usuario decide); nº de estrategias que
 superen la convalidación OOS (nada más correcto que el backtest para decidirlo).
+
+### Sub-hito "F1 – Infraestructura multi-perfil" (cerrado, D-072)
+
+**Fecha:** 2026-10-06 | **Estado:** entregado en verde; sin tocar la ejecución (regla de oro F1).
+
+- `core/strategy_map.py`: `parse_map` (mapeo magic→perfil, `map` vacío lanza), `profile_for_magic`
+  (default como heredero si desconocido/ausente), `magics_for`, `sl_distance_by_profile`
+  (precedencia: slot del perfil → legacy `sl_distance_by_symbol` solo para el default → global →
+  pips legacy → `(None, "none")`), `StrategyMapError`.
+- `settings/strategy_map_source.py`: lectura cacheada por firma mtime+tamaño; fichero
+  ausente→`DEFAULT_MAP`; YAML roto→`StrategyMapError`.
+- `config/strategy_map.yaml`: `{8882026: default}` con comentarios de validación.
+- `core/paths.py`: `STRATEGY_MAP_PATH` (env `STRATEGY_MAP_PATH`).
+- `database/store.py`: `ConfigSource.strategy_map()` (import tardío) + `get_strategy_map()`.
+- `api/services/mt5_market.py`: `daily_risk_state` expone `trades_by_magic` y `profiles_by_magic`;
+  `_mapa_perfiles()` (sin store/error → `DEFAULT_MAP`); `_filas_de_deals` con `magic`.
+- Tests: `tests/unit/test_strategy_map.py` (29), `test_api_market_port.py` (3 exposición),
+  `test_store.py` (2 seam). Suite: **1515 passed, 2 xfailed** (antes de F0: 1477).
+- Pendiente de F1 (fase 2, al desplegar, no ahora): topes por perfil y `strategy_<perfil>.yaml`.
+- Validación: `py_compile` OK; líneas de `core/` ≤ 170 (máx. 95). Ruff no instalado en el entorno.
+
+**Siguiente fase:** F2 – convalidación del CTA Swing en `research/` (D1 MT5 demo, IS/OOS + embargo + fricción).

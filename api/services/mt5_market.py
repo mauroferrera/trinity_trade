@@ -50,7 +50,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from adapters.base_adapter import TIMEFRAMES, AdapterError, SymbolNotFound
 from adapters.forex import mt5_forex
 from agent.ports import AgentPortError
-from core import clock, risk_engine, setup_gate, smc_engine, strategy, trade_history
+from core import clock, risk_engine, setup_gate, smc_engine, strategy, strategy_map, trade_history
 from core.orderflow_engine import build_cvd_series, pick_cvd_source
 from macro_ingestor.base_ingestor import neutro
 
@@ -121,6 +121,23 @@ def _topes(cfg: Dict[str, Any], riesgo: Dict[str, Any], clave: str) -> Any:
     if clave in riesgo and riesgo.get(clave) is not None:
         return riesgo.get(clave)
     return strategy._primer_valor(cfg, (clave,), ("risk", clave))
+
+
+def _cuenta_magics(filas: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Operaciones de hoy contadas por magic, en string (shape JSON).
+
+    El magic es el único hecho que viaja en el deal y el que distingue una
+    estrategia de otra: sin él no hay forma de preguntarle al mapa de perfiles a
+    qué estrategia pertenece una operación.
+    """
+    contadas: Dict[str, int] = {}
+    for fila in filas:
+        m = fila.get("magic")
+        if m is None:
+            continue
+        clave = str(m)
+        contadas[clave] = contadas.get(clave, 0) + 1
+    return contadas
 
 
 class MT5Market:
@@ -302,6 +319,7 @@ class MT5Market:
                 {
                     "ticket": lead.ticket,
                     "position_id": position_id,
+                    "magic": getattr(lead, "magic", None),
                     "time": marca(cierre_utc),
                     "time_open": marca(entrada_utc) if entrada_utc is not None else None,
                     "symbol": lead.symbol,
@@ -807,10 +825,11 @@ class MT5Market:
         riesgo = cfg.get("risk") if isinstance(cfg.get("risk"), dict) else {}
         hoy = self._reloj.trading_day()
         try:
-            operaciones = len(self.history(1))
+            filas = self.history(1)
         except Exception as exc:  # noqa: BLE001 - idem: se dice que no se pudo leer
             return {"error": "no se pudo leer el historial: {0}".format(exc),
                     "balance": cuenta.get("balance")}
+        operaciones = len(filas)
         estado: Dict[str, Any] = {
             "trading_day": hoy,
             "balance": cuenta.get("balance"),
@@ -823,6 +842,17 @@ class MT5Market:
             "reduced_risk_pct": _topes(cfg, riesgo, "reduced_risk_pct"),
             "loss_limit_fixed": _topes(cfg, riesgo, "loss_limit_fixed"),
             "loss_limit_pct": _topes(cfg, riesgo, "loss_limit_pct"),
+        }
+        # Exposición por magic y por perfil: el primer paso del multi-perfil
+        # (D-071) sin tocar la ejecución. Los CONTEO son hechos del historial; el
+        # perfil sale del mapa magic -> perfil (default si no hay mapa o el magic
+        # no está). Los topes POR perfil llegan en F2+, cuando cada estrategia
+        # tenga su propio `strategy<perfil>.yaml` cableado.
+        estado["trades_by_magic"] = _cuenta_magics(filas)
+        mapa = self._mapa_perfiles()
+        estado["profiles_by_magic"] = {
+            str(m): strategy_map.profile_for_magic(m, mapa)
+            for m in estado["trades_by_magic"]
         }
         fijo = estado["loss_limit_fixed"]
         balance = cuenta.get("balance")
@@ -869,6 +899,22 @@ class MT5Market:
         estado["blocked"] = bool(razones)
         estado["reasons"] = razones
         return estado
+
+    def _mapa_perfiles(self) -> Dict[int, str]:
+        """El mapa magic -> perfil, o el de fábrica si no hay mapa utilizable.
+
+        Sin store, o con un store que no exponga el mapa (stubs, versiones
+        viejas), todo resuelve al perfil "default": un solo YAML, el
+        comportamiento histórico. El error NO se propaga: la exposición por
+        magic es diagnóstica, no puede tumbar el panel de riesgo.
+        """
+        if self._store is None:
+            return strategy_map.DEFAULT_MAP
+        try:
+            mapa = self._store.get_strategy_map() or {}
+        except Exception:  # noqa: BLE001 - sin mapa todo es el perfil default
+            return strategy_map.DEFAULT_MAP
+        return mapa if isinstance(mapa, dict) else strategy_map.DEFAULT_MAP
 
     def _balance_inicio(self, trading_day: str, por_defecto: float) -> Tuple[float, bool]:
         """`(balance_inicio, estaba_guardado)`.

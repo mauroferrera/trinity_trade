@@ -42,6 +42,13 @@ STRATEGY_PATH = os.environ.get(
     "STRATEGY_PATH", os.path.join(CONFIG_DIR, "strategy.yaml")
 )
 
+# strategy_map.yaml -> el magic con que sale una orden. Un fichero aparte de
+# strategy.yaml porque es OTra clase de configuración: strategy.yaml es UN
+# perfil, y el mapa es cómo se distingue un perfil de otro por magic (D-071).
+STRATEGY_MAP_PATH = os.environ.get(
+    "STRATEGY_MAP_PATH", os.path.join(CONFIG_DIR, "strategy_map.yaml")
+)
+
 # --- Persistencia ------------------------------------------------------------
 
 # El activo más valioso del proyecto: de aquí salen el post-mortem, los win-rate

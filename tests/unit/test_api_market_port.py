@@ -75,13 +75,18 @@ class StoreStub:
         cfg: Optional[Dict[str, Any]] = None,
         cot: Optional[List[Any]] = None,
         prop_state: Optional[Dict[str, Any]] = None,
+        mapa: Optional[Dict[int, str]] = None,
     ) -> None:
         self._cfg = cfg if cfg is not None else {}
         self._cot = cot or []
         self._prop_state = prop_state or {}
+        self._mapa = mapa or {}
 
     def get_trading_config(self) -> Dict[str, Any]:
         return self._cfg
+
+    def get_strategy_map(self) -> Dict[int, str]:
+        return dict(self._mapa)
 
     def list_cot_reports(self, *args: Any, **kwargs: Any) -> List[Any]:
         return self._cot
@@ -131,6 +136,7 @@ class Deal:
         commission: float = 0.0,
         swap: float = 0.0,
         volume: float = 1.0,
+        magic: int = 0,
     ) -> None:
         self.ticket = ticket
         self.position_id = position_id
@@ -144,6 +150,7 @@ class Deal:
         self.swap = swap
         self.time = time_
         self.reason = 1
+        self.magic = magic
 
 
 @pytest.fixture
@@ -636,6 +643,42 @@ class TestDailyRiskState:
 
         assert construir(store=store).daily_risk_state()["balance_source"] == "estimado"
 
+    def test_reporta_la_exposicion_por_magic_y_por_perfil(
+        self, construir: Callable[..., MT5Market], cfg_real: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F1: el primer paso del multi-perfil es PODER MEDIR la exposición por
+        estrategia. Los conteos salen del historial; el perfil, del mapa.
+
+        Un magic sin mapa no puede dejar de contarse: `trades_by_magic` son
+        hechos y `profiles_by_magic` es la interpretación, y las dos van.
+        """
+        filas = [
+            {"magic": 8882026},
+            {"magic": 8882026},
+            {"magic": 9999001},
+            {"magic": None},
+        ]
+        monkeypatch.setattr(MT5Market, "history", lambda self, days=7: filas)
+        store = StoreStub(cfg_real, mapa={8882026: "default", 9999001: "cta"})
+
+        estado = construir(store=store).daily_risk_state()
+
+        assert estado["trades_by_magic"] == {"8882026": 2, "9999001": 1}
+        assert estado["profiles_by_magic"] == {"8882026": "default", "9999001": "cta"}
+
+    def test_sin_mapa_un_magic_desconocido_resuelve_a_default(
+        self, construir: Callable[..., MT5Market], cfg_real: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sin mapa configurado, todo es el perfil default: el comportamiento de
+        un solo YAML no cambia.
+        """
+        filas = [{"magic": 8882026}, {"magic": 9999001}]
+        monkeypatch.setattr(MT5Market, "history", lambda self, days=7: filas)
+
+        estado = construir().daily_risk_state()
+
+        assert estado["profiles_by_magic"] == {"8882026": "default", "9999001": "default"}
+
 
 # ---------------------------------------------------------------------------
 # Order flow
@@ -800,3 +843,15 @@ class TestHistorial:
         filas = construir().history(7)
 
         assert [f["position_id"] for f in filas] == [200, 100]
+
+    def test_cada_fila_lleva_el_magic_de_la_operacion(
+        self, construir: Callable[..., MT5Market], mt5: FakeMT5
+    ) -> None:
+        """El magic es el único hecho del deal que distingue una estrategia de otra."""
+        entrada = Deal(1, 100, type_=0, price=1.1000, time_=1_700_000_000, entry=0, magic=8882026)
+        cierre = Deal(2, 100, type_=1, price=1.1050, profit=5.0, time_=1_700_003_600, entry=1, magic=8882026)
+        mt5.history_deals_get = lambda frm, to: [entrada, cierre]
+
+        filas = construir().history(7)
+
+        assert filas[0]["magic"] == 8882026

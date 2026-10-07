@@ -134,6 +134,7 @@ class ConfigSource(Protocol):
     def data_sources(self) -> dict: ...
     def agent_topics(self) -> dict: ...
     def watcher_config(self) -> dict: ...
+    def strategy_map(self) -> dict: ...
 
 
 class _LazyStrategyConfig:
@@ -169,6 +170,18 @@ class _LazyStrategyConfig:
 
     def watcher_config(self) -> dict:
         return self._config(self._mod().get_watcher_config) or {}
+
+    def strategy_map(self) -> dict:
+        """El mapa magic -> perfil. El map sabe resolver su propio error: un mapa
+        ausente es `DEFAULT_MAP`, uno mal formado lanza `StrategyMapError`."""
+        try:
+            from settings import strategy_map_source  # noqa: PLC0415 - tardío
+        except ImportError as exc:  # pragma: no cover - el paquete está en el repo
+            raise ConfigUnavailable(
+                "store necesita el mapa de estrategias y 'settings.strategy_map_source' "
+                "no se puede importar."
+            ) from exc
+        return self._config(strategy_map_source.load)
 
     @staticmethod
     def _config(llamar, *args) -> dict:
@@ -356,6 +369,10 @@ def set_setting(key, value):
 
 def get_trading_config():
     return _config_source.get_config()
+
+
+def get_strategy_map():
+    return _config_source.strategy_map()
 
 
 def set_trading_config(cfg):

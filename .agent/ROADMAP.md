@@ -199,18 +199,22 @@ Ver `DECISIONS.md` (D-005) y `PROJECT_STATE.json` (`reference_code`).
 - [ ] Revalidación futura si cambian el gate o la mecánica de fills (pipeline reproducible)
 
 ## Hoja de ruta multi-estrategia (D-071) — CTA Swing + Mean Reversion + Copilot + ILOF
-**Estado:** Plan aprobado (2026-10-06) | **Prioridad:** Media-alta (después de cerrar 6E)
+**Estado:** F0 y F1 entregadas (2026-10-06) | **Prioridad:** Media-alta (después de cerrar 6E)
 
 Principios (no negociables): convalidación antes que conexión (nada en vivo sin veredicto OOS);
 `ExecutionService` = única puerta de salida; `regime()` = árbitro de desactivación mutua; los
 módulos nuevos nacen en `research/` y se despliegan primero en alerta (`auto_execute=false`);
 suite en verde como criterio de aceptación.
 
-- [ ] **F0 – Cierre limpio de 6E** (solo administrativo, sin deploy demo): commit + documentación
-  de `research/`. Rotar `DATABENTO_API_KEY` queda PENDIENTE por decisión del usuario.
-- [ ] **F1 – Infraestructura multi-perfil**: `strategy_map` (magic→perfil), `strategy_<perfil>.yaml`
-  vía `STRATEGY_PATH`, `sl_distance_by_symbol` → `by_profile_by_symbol`; `daily_risk_state` expone
-  DD/topes por magic y global. ILOF = "módulo presente en investigación". Sin cambios de ejecución.
+- [x] **F0 – Cierre limpio de 6E** (solo administrativo, sin deploy demo): commit `68aa14b` +
+  documentación de `research/`. Rotar `DATABENTO_API_KEY` queda PENDIENTE por decisión del usuario.
+- [x] **F1 – Infraestructura multi-perfil** (D-072): `core/strategy_map.py` (magic→perfil,
+  `profile_for_magic` → `default` como heredero), `config/strategy_map.yaml`
+  (`{8882026: default}`), `settings/strategy_map_source.py` (lectura cacheada), seam
+  `ConfigSource.strategy_map()` en `database/store.py`, `daily_risk_state` expone
+  `trades_by_magic`/`profiles_by_magic`. Sin cambios de ejecución (regla de oro F1). Suite
+  `1515 passed, 2 xfailed`. Queda F1-fase2 (topes por perfil al desplegar, no ahora).
+  ILOF = "módulo presente en investigación".
 - [ ] **F2 – Convalidación CTA en `research/`**: OHLCV D1 de MT5 demo (EURUSD, XAUUSD, US500,
   GBPUSD, AUDUSD, 2 años), simulador breakout próximo-open + trailing ATR + vol-targeting en
   `lot_calculator`; réplica IS/OOS + embargo + fricción. **Gate: solo pasa si OOS supera la fricción.**

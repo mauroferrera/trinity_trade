@@ -1187,3 +1187,25 @@ commit. Fases: F0 cierre 6E, F1 infraestructura multi-perfil (strategy_map + DD 
 `daily_risk_state`), F2 convalidación CTA, F3 convalidación VWAP + régimen como interruptor, F4
 despliegue en alerta, F5 ejecución multi-estrategia (nuevo `core/exit_policy.py` para trailing
 D1, gates evalúan el plan de cada perfil). Detalle en `ROADMAP.md` y `CHECKLIST.md`.
+
+### D-072 - F1 entregada: `strategy_map` magic→perfil, SL por perfil y exposición por magic en `daily_risk_state`, sin tocar la ejecución
+
+F1 se implementa y queda detrás del mismo seam de config que `STRATEGY_PATH`: nuevo módulo puro
+`core/strategy_map.py` (parsea el mapa, resuelve `profile_for_magic` → `default` si desconocido o
+sin fichero, deriva `sl_distance_by_profile` con precedencia `by_profile_by_symbol[perfil][SYM]` →
+legacy `sl_distance_by_symbol` SOLO para el default → `sl_distance` global → `sl_default_pips` x
+spec → `(None, "none")`, todo bajo `StrategyMapError`); `settings/strategy_map_source.py` (lectura
+cacheada por firma mtime+tamaño, ausente→`DEFAULT_MAP={8882026:"default"}`, roto→lanza);
+`config/strategy_map.yaml` con el mapa real; `STRATEGY_MAP_PATH` en `core/paths.py`; seam
+`ConfigSource.strategy_map()` en `database/store.py` (import tardío, `StrategyConfigError`→
+`ConfigUnavailable`); en `api/services/mt5_market.py` `daily_risk_state` expone `trades_by_magic`
+y `profiles_by_magic` (los conteos son HECHOS del historial, el perfil sale del mapa; los topes
+por perfil llegan en F2+, fase de despliegue 2). El perfil "default" es el heredero histórico:
+un magic desconocido, un fichero ausente o un fallo del mapa resuelven SIEMPRE a "default"
+(comportamiento de un solo YAML intacto). REGLA DE ORO F1 cumplida: nada de esto se consume en
+ejecución todavía (`execution.py`, `watcher_service.py`, gates y `strategy.yaml` sin cambios);
+los módulos nuevos solo se validan en tests (`tests/unit/test_strategy_map.py`, 29 tests;
+`test_api_market_port.py` con `Deal.magic`, 3 tests de exposición; `test_store.py` con el seam).
+Lint: ruff no está instalado en el entorno (ni en el PATH ni como módulo), la validación de F1 es
+`py_compile` + límite de 170 chars en `core/` (máx. observado 95) + suite completa
+`1515 passed, 2 xfailed` (antes de F1: `1477 passed, 2 xfailed`).

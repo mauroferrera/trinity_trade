@@ -2,7 +2,7 @@
   "project_name": "MultiMarket Quant Engine",
   "version": "0.1.0",
   "active_phase": "Phase 7 - Multi-mercado (forex + B3 + cripto)",
-  "status": "convalidacion_estrategia_6e_sobre_cinta_real_terminada_veredicto_no_convalida",
+  "status": "f1_infraestructura_multi_perfil_entregada_en_verde_sin_tocar_la_ejecucion",
   "last_updated": "2026-10-06",
   "blockers": [],
   "repo": {
@@ -132,7 +132,16 @@
     "MEJORAS_DATABENTO.md - historico de roll, reconciliacion y parametros (bloque 6)",
     "research/build_6e_candles.py - unio de 6EU6+6EZ6 en velas M15 continuas con delta y PDH/PDL + sidecar sha256",
     "research/backtest_6e.py - replay IS/OOS/embargo con el core real (smc_engine -> setup_score -> evaluate_gate), dos modelos de fill, MFE/MAE y reason_tally",
-    "backtest 6E: dataset de velas M15 (5.888 barras) y JSON de resultados en trinity_data, fuera del repo"
+    "backtest 6E: dataset de velas M15 (5.888 barras) y JSON de resultados en trinity_data, fuera del repo",
+    "core/strategy_map.py (F1/D-072): parse_map, profile_for_magic (default como heredero), magics_for, sl_distance_by_profile, StrategyMapError",
+    "config/strategy_map.yaml (F1): mapa real {8882026: default}",
+    "settings/strategy_map_source.py (F1): lectura cacheada por firma mtime+tamano; ausente->DEFAULT_MAP; roto->StrategyMapError",
+    "core/paths.py::STRATEGY_MAP_PATH (F1, env STRATEGY_MAP_PATH)",
+    "database/store.py::ConfigSource.strategy_map() + get_strategy_map() (F1, import tardio, StrategyConfigError->ConfigUnavailable)",
+    "api/services/mt5_market.py::daily_risk_state expone trades_by_magic y profiles_by_magic (F1)",
+    "tests/unit/test_strategy_map.py (F1, 29 tests)",
+    "tests/unit/test_api_market_port.py::Deal.magic + 3 tests de exposicion por magic/perfil (F1)",
+    "tests/unit/test_store.py::FakeConfigSource.strategy_map + 2 tests del seam (F1)"
   ],
   "in_progress": [
     "el bucle del watcher: cuando exista, entra por ExecutionService (D-063). El scan por HTTP ya esta."
@@ -747,5 +756,57 @@
       "F5 - Ejecucion multi-estrategia: activacion via ExecutionService con plan y exit_policy por perfil (nuevo core/exit_policy.py para trailing D1); Copilot manual siempre abierto"
     ],
     "datos_cta": "MT5 demo copy_rates (gratis, sufuciente para D1/H4); Databento SOLO para microestructura intradia (M1/M15)"
+  },
+  "f1_multi_profile": {
+    "hito": "F1 - Infraestructura multi-perfil (strategy_map magic->perfil + exposicion por magic)",
+    "fecha": "2026-10-06",
+    "estado": "entregado en verde; sin tocar la ejecucion (regla de oro F1)",
+    "decisiones": [
+      "D-071 (roadmap)",
+      "D-072 (implementacion y validacion)"
+    ],
+    "suite": "1515 passed, 2 xfailed (antes de F1: 1477 passed, 2 xfailed)",
+    "validacion": [
+      "py_compile OK",
+      "lineas de core/ <= 170 (maximo observado 95)",
+      "ruff NO instalado en el entorno (ni PATH ni modulo); validacion via suite + py_compile"
+    ],
+    "mapa": {
+      "fichero": "config/strategy_map.yaml",
+      "real": "{8882026: default}",
+      "resolucion": "magic desconocido, fichero ausente o fallo del mapa => SIEMPRE 'default' (heredero historico de un solo YAML)",
+      "src_cache": "settings/strategy_map_source.py (firma mtime+tamano, ausente->DEFAULT_MAP, roto->StrategyMapError)"
+    },
+    "sl_por_perfil": {
+      "precedencia": [
+        "1) by_profile_by_symbol[perfil][SIMBOLO] (origen profile_symbol)",
+        "2) legacy sl_distance_by_symbol SOLO para el perfil default (origen symbol)",
+        "3) sl_distance global",
+        "4) sl_default_pips x spec.pip (origen legacy_pips)",
+        "5) (None, 'none')"
+      ],
+      "garantia": "el slot de un perfil NO contamina a otro; el default sin mapa conserva equivalencia total con sl_distance_for"
+    },
+    "daily_risk_state": {
+      "nuevos_campos": [
+        "trades_by_magic (dict magic-str -> conteo, hecho del historial, omite None)",
+        "profiles_by_magic (perfil sale del mapa, no del historial)"
+      ],
+      "deferred_a_f2": "topes/DD por perfil se aplican en F2+ cuando se despliegue, no ahora"
+    },
+    "seam": "ConfigSource.strategy_map() (6 metodos); import tardio en _LazyStrategyConfig; StrategyConfigError->ConfigUnavailable",
+    "no_tocado": [
+      "execution.py",
+      "watcher_service.py",
+      "setup_gate.py",
+      "strategy.yaml",
+      "core/ sin imports de adapters/api/agent/proveedores (test_core_purity en verde)"
+    ],
+    "tests": [
+      "tests/unit/test_strategy_map.py (29)",
+      "tests/unit/test_api_market_port.py (+3 exposicion)",
+      "tests/unit/test_store.py (+2 seam)"
+    ],
+    "pendiente_f1_fase2": "strategy_<perfil>.yaml via STRATEGY_PATH y topes por perfil al desplegar (F2+)"
   }
 }
