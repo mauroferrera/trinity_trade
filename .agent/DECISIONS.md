@@ -1250,3 +1250,59 @@ mismo que produce el simulador. El CTA NO se ejecuta todavía: convalida (F2) y 
 F4/F5 (perfil propio + `exit_policy.py` + modo alerta `auto_execute=false`, D-071). Registro:
 `MEJORAS_CTA_D1.md`, ROADMAP/CHECKLIST/PROJECT_STATE. Suite completa tras F2: **1537 passed,
 2 xfailed** (antes de F2: 1515).
+
+### D-075 - Diseño de la convalidación del Mean Reversion VWAP: motor puro en `research/mr.py`, dataset D1 de F2 y `regime()` como interruptor
+
+F3 replica el proceso de F2 (D-073) para la pata de compresión: `research/mr.py` es módulo PURO
+(sin pandas/numpy, listas alineadas con `None` en el warm-up) y TODO se decide antes de ver
+datos: VWAP rolling de 20 barras sobre precio típico (H+L+C)/3 ponderado por `volume` (None en
+el warm-up; las barras de volumen cero no contaminan la ventana), bandas ±2×ATR (el mismo ATR
+Wilder de F2), señal CONTRARIA al cierre de la barra `i` (cierre > banda superior → SHORT,
+< inferior → LONG; la banda de `i` se conoce al cerrar `i`, el fill va al open de `i+1`, sin
+lookahead), target fijo = VWAP de la barra de señal (conocido al abrir), stop = fill ∓ 2×ATR de
+la barra de señal, `max_hold` = 10 barras D1 como techo temporal; si una misma barra toca SL y
+TP, SL PRIMERO (conservador, como `backtest_6e.py`); el hueco SOLO empeora el SL (fill al open)
+mientras el TP llena en target exacto — nunca se acredita un hueco a favor, que sería una cota
+optimista. Datos: el operador eligió REUSAR el dataset D1 de F2 (5 símbolos, 1.200 barras, misma
+raíz y sidecars), y con él el split exacto — `research/backtest_mr.py` importa
+`split_days`/`role_of_day`/`segment_stats`/`verdict` de `backtest_cta.py` para que el eje
+temporal (IS hasta 2024-11-06, embargo 30 días, OOS hasta 2026-10-07) sea idéntico en las dos
+convalidaciones. Fricción 1 tick adverso por lado con el `tick_size` real del sidecar, tamaño por
+`vol_target_lots` (equity 100k, vol_target 0.10), una posición a la vez por símbolo. El
+INTERRUPTOR de F3 vive en el backtest, no en el motor: cada señal evalúa
+`core/risk_engine.regime()` sobre las velas HASTA la barra de señal (`candles[:i+1]`, jamás el
+futuro) y solo opera si devuelve `"rango"` (`TRADE_REGIME`, lookback 60); una referencia SIN gate
+corre en paralelo para medir qué compra el interruptor. La aritmética se fija con 18 tests
+deterministas de lápiz (`tests/unit/test_mr.py`), incluidos el convenio de hueco TP/SL y el
+censurado MAX_HOLD/END_OF_DATA. Parámetros fijados sin mirar el resultado (D-065): VWAP 20,
+k de bandas 2.0, SL_K 2.0, max_hold 10. Validación: ruff NO instalado en el entorno;
+`py_compile` + suite en verde.
+
+### D-076 - Veredicto F3: NO CONVALIDADO - el MR VWAP en D1 no supera la fricción y `regime()` nunca dispara "rango" en datos reales
+
+Ejecutado `research/backtest_mr.py` sobre el dataset D1 de F2 (mismo split, mismas reglas de
+fricción y sizing que F2). El resultado tiene dos capas independientes. (1) Configuración
+canónica CON el interruptor: **0 fills** — de 1.296 señales, 1.254 saltadas por
+`regime() == "expansion"`, 40 por embargo, 2 por no tener barra de fill ⟹ veredicto
+**INCONCLUSIVE por construcción**: no es que el edge falle, es que el gate nunca abre.
+(2) Referencia SIN gate (misma estrategia, sin el interruptor): **IS 183 trades, win 43,2 %,
+PF 0,886 (−283 ticks, −10.840 USD); OOS 120 trades, win 47,5 %, PF 0,968 (−406 ticks,
+−2.020 USD)** ⟹ la estrategia por sí sola **no supera la fricción** (1 tick/lado ya
+descontado) tampoco en OOS. Diagnóstico del interruptor: `regime()` clasifica por
+`ratio = span(60 barras)/cuerpo_medio` con umbrales fijos (≥6 expansión, ≤3 rango) y en datos
+reales ese ratio no baja — D1: p50 ≈ 15 sobre las 6.000 barras del dataset (1 sola barra de
+"rango" en 6.000, GBPUSD); sondeo de 5.000 barras M15 × 5 símbolos, la temporalidad que
+alimenta producción (`mt5_market.py`, `DEFAULT_TIMEFRAME = "M15"`), da **100 % expansión**.
+El test de `regime()` solo asserta "que corra"
+(`tests/unit/test_risk_engine.py::TestRegime` → `in ("expansion","rango","neutro")`), nunca que
+cada estado dispare: los umbrales 6.0/3.0 nunca se validaron contra datos reales. Hoy
+`regime()` solo se MUESTRA en el panel (no gatea nada en vivo), así que el impacto funcional es
+cero, pero queda la deuda documentada: el árbitro "compresión→VWAP" de D-071 no puede abrirse
+con la heurística actual. Decisión del operador (elegida tras presentar el diagnóstico y sus
+tres opciones): **cerrar F3 como NO CONVALIDADO sin tocar `core/risk_engine.py`** — la
+recalibración de umbrales contra datos es mejora futura, no calibración a posteriori de la
+estrategia (D-065). Efecto en el roadmap: F4/F5 (CTA en alerta) no se ven afectados, porque con
+`regime()` siempre en "expansión" el CTA quedaría siempre habilitado y hoy no existe ningún
+gate en vivo que lo discuta. Registro: `MEJORAS_MR_VWAP.md`,
+ROADMAP/CHECKLIST/PROJECT_STATE. Suite completa tras F3: **1555 passed, 2 xfailed**
+(antes de F3: 1537).

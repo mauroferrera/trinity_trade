@@ -223,8 +223,17 @@ suite en verde como criterio de aceptación.
   OOS 47 trades, +150,99 USD/trade. Suite `1537 passed, 2 xfailed`. Sin calibración (parámetros
   clásicos fijados antes de ver el resultado). Detalle en `MEJORAS_CTA_D1.md`.
               **Gate cumplido: solo pasa si OOS supera la fricción → PASS.**
-- [ ] **F3 – Convalidación Mean Reversion (VWAP)**: mismo proceso; `regime()` como interruptor
-  (expansión→ILOF+CTA, compresión→VWAP, noticias→solo Copilot).
+- [x] **F3 – Convalidación Mean Reversion (VWAP)** (D-075/D-076): mismo proceso y mismo dataset
+  D1 de F2; motor puro `research/mr.py` (VWAP 20 sobre precio típico + bandas ±2×ATR, target =
+  VWAP de la señal, SL = 2×ATR, max_hold 10) con `regime()` como interruptor
+  (solo opera en `"rango"`), más una referencia sin gate. **Veredicto: NO CONVALIDADO** —
+  (1) con el gate: 0 fills, 1.254 de 1.296 señales saltadas porque `regime()` devuelve
+  `"expansion"` SIEMPRE (D1 p50≈15; sondeo M15 de producción, 5.000 barras × 5 símbolos:
+  100 %) ⟹ INCONCLUSIVE por construcción; (2) sin gate: no supera la fricción (OOS 120 trades,
+  PF 0,968, −406 ticks). Deuda documentada: los umbrales 6.0/3.0 de `regime()` nunca se
+  validaron contra datos reales (su test solo asserta "que corra"); decisión del operador,
+  no se toca `core/`. Suite `1555 passed, 2 xfailed`. Detalle en `MEJORAS_MR_VWAP.md`.
+              **Gate de la F3: solo pasa si OOS supera la fricción → NO CONVALIDA.**
 - [ ] **F4 – Despliegue en alerta**: módulos validados corren simulados con su magic y perfil.
   Cero órdenes reales.
 - [ ] **F5 – Ejecución multi-estrategia**: activación vía `ExecutionService` con plan y `exit_policy`

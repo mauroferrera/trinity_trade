@@ -571,4 +571,33 @@ superen la convalidación OOS (nada más correcto que el backtest para decidirlo
 - Pendiente de F2 (fases F4/F5): ejecutar el CTA requiere perfil propio + `exit_policy.py`
   + modo alerta `auto_execute=false`; `regime()` es el árbitro hasta entonces.
 
-**Siguiente fase:** F3 – convalidación Mean Reversion (VWAP) + `regime()` como interruptor.
+### Sub-hito "F3 – Convalidación del Mean Reversion VWAP" (cerrado, D-075/D-076)
+
+**Fecha:** 2026-10-07 | **Estado:** NO CONVALIDADO; sin tocar la ejecución ni `core/`.
+
+- `research/mr.py` (motor puro, sin pandas): `typical_price`, `vwap` (rolling de `n`,
+  warm-up `None`, volumen cero ignorado), `bands` (±k×ATR), `mr_signals` (contraria al cierre
+  de `i`, fill al open de `i+1`, desigualdad estricta), `simulate_mr` (target = VWAP de la
+  señal, SL = fill∓k×ATR, SL primero si la misma barra toca ambos, hueco solo empeora el SL,
+  `MAX_HOLD`/`END_OF_DATA`, MFE/MAE raw). 18 tests deterministas de lápiz en
+  `tests/unit/test_mr.py`.
+- `research/backtest_mr.py`: REUSA el dataset D1 de F2 y el split/stats/verdict de
+  `backtest_cta.py` (mismo eje: IS 2024-11-06 | embargo 30d, 40 señales | OOS 2026-10-07);
+  fricción 1 tick/lado con tick_size real, vol-target igual que F2, una posición a la vez.
+  Interruptor: `regime(candles[:i+1]) == "rango"` (lookback 60) por señal, con referencia
+  corriendo SIN el gate en paralelo.
+- **Resultado (canónico, con gate):** 0 fills — 1.254 de 1.296 señales saltadas por
+  `regime() == "expansion"`, 40 por embargo, 2 sin barra de fill ⟹ **INCONCLUSIVE por
+  construcción** (el gate nunca abre).
+- **Resultado (referencia, sin gate):** IS 183 trades, PF 0,886 (−283 ticks); OOS 120 trades,
+  win 47,5 %, PF 0,968 (−406 ticks, −2.020 USD) ⟹ **no supera la fricción**.
+- Diagnóstico `regime()`: ratio span/cuerpo con p50 ≈ 15 en D1 (umbrales ≥6/≤3; 1 barra de
+  "rango" en 6.000) y **100 % expansión** en 5.000 barras M15 × 5 símbolos (la temporalidad
+  que alimenta producción). Su test solo asserta "que corra". Hoy es informativo en el panel
+  (sin gate en vivo) ⟹ **deuda documentada**; decisión del operador: no tocar
+  `core/risk_engine.py`.
+- Suite completa tras F3: **1555 passed, 2 xfailed** (antes de F3: 1537).
+- Validación: `py_compile` OK; ruff no instalado en el entorno (suite + `py_compile`).
+
+**Siguiente fase:** F4 – despliegue en alerta (el CTA convalidado en F2 corre simulado; el MR
+VWAP queda fuera por no convalidar).

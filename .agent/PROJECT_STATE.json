@@ -2,7 +2,7 @@
   "project_name": "MultiMarket Quant Engine",
   "version": "0.1.0",
   "active_phase": "Phase 7 - Multi-mercado (forex + B3 + cripto)",
-  "status": "f2_cta_convalidado_en_verde_oos_supera_la_friccion_sin_tocar_la_ejecucion",
+  "status": "f3_mr_vwap_no_convalidado_mr_falla_la_friccion_y_regime_nunca_dispara_rango_sin_tocar_core",
   "last_updated": "2026-10-06",
   "blockers": [],
   "repo": {
@@ -148,7 +148,12 @@
     "research/backtest_cta.py (F2/D-074): replica IS/OOS/embargo + friccion 1 tick/lado, verdict 'OOS supera la friccion'",
     "tests/unit/test_cta.py (F2, 14 tests deterministas) + TestVolTarget en test_lot_calculator.py (F2, 7 tests)",
     "MEJORAS_CTA_D1.md (F2/D-074): historico de diseno, split y veredicto PASS",
-    "backtest CTA D1: dataset (6.000 barras), JSON de resultados y veredicto PASS en trinity_data, fuera del repo"
+    "backtest CTA D1: dataset (6.000 barras), JSON de resultados y veredicto PASS en trinity_data, fuera del repo",
+    "research/mr.py (F3/D-075): motor puro (vwap rolling tipico ponderado con warm-up None, bandas +/-k*ATR, senal contraria sin lookahead, target=VWAP de la senal, SL primero, hueco solo empeora el SL, MAX_HOLD/END_OF_DATA)",
+    "research/backtest_mr.py (F3/D-076): replica F2 con el interruptor regime(candles[:i+1])=='rango' por senal + referencia corriendo SIN gate; reusa split/stats/verdict de backtest_cta.py",
+    "tests/unit/test_mr.py (F3, 18 tests deterministas de lapiz)",
+    "MEJORAS_MR_VWAP.md (F3/D-076): historico de diseno, veredicto NO CONVALIDADO y deuda de regime()",
+    "backtest MR VWAP D1: JSON de resultados (0 fills con gate, referencia sin gate) en trinity_data, fuera del repo"
   ],
   "in_progress": [
     "el bucle del watcher: cuando exista, entra por ExecutionService (D-063). El scan por HTTP ya esta."
@@ -758,7 +763,7 @@
       "F0 - Cierre limpio de 6E (solo administrativo: commit + docs de research/, sin deploy demo); ROTAR DATABENTO_API_KEY DEJADO COMO ESTA por decision del usuario",
       "F1 - Infraestructura multi-perfil: strategy_map (magic->perfil), strategy_<perfil>.yaml via STRATEGY_PATH, sl_distance_by_symbol -> by_profile_by_symbol, daily_risk_state con DD/topes por magic y global; ILOF = modulo presente en investigacion",
       "F2 - Convalidacion CTA en research/: OHLCV D1 de MT5 demo (EURUSD, XAUUSD, US500, GBPUSD, AUDUSD, ~4,7 anios), breakout proximo-open + trailing ATR + vol-targeting en lot_calculator; GATE cumplido (OOS supera la friccion) -> CONVALIDA, Veredicto PASS (D-074)",
-      "F3 - Convalidacion Mean Reversion (VWAP): mismo proceso; regime() como interruptor",
+      "F3 - Convalidacion Mean Reversion (VWAP) (D-075/D-076): mismo dataset y proceso que F2, motor puro research/mr.py (VWAP 20 + bandas 2*ATR, target=VWAP, max_hold 10) con regime() como interruptor -> NO CONVALIDADO: 0 fills con el gate porque regime() devuelve 'expansion' SIEMPRE (D1 y M15), y sin gate no supera la friccion (OOS 120 trades, PF 0.968, -406 ticks)",
       "F4 - Despliegue en alerta: modulos validados corren simulados con su magic y perfil, cero ordenes reales",
       "F5 - Ejecucion multi-estrategia: activacion via ExecutionService con plan y exit_policy por perfil (nuevo core/exit_policy.py para trailing D1); Copilot manual siempre abierto"
     ],
@@ -862,5 +867,52 @@
       "ruff NO instalado en el entorno; validacion via suite + py_compile"
     ],
     "pendiente_f2": "ejecutar el CTA es F4/F5: perfil propio + core/exit_policy.py (trailing D1) + modo alerta auto_execute=false; regime() es el arbitro hasta entonces"
+  },
+  "f3_mr_vwap": {
+    "hito": "F3 - Convalidacion del Mean Reversion VWAP (VWAP rolling + bandas ATR + regime() como interruptor)",
+    "fecha": "2026-10-07",
+    "estado": "NO CONVALIDADO; sin tocar la ejecucion ni core/ (decision del operador)",
+    "decisiones": [
+      "D-071 (roadmap)",
+      "D-075 (diseno del motor, reuso del dataset D1 de F2 y del interruptor)",
+      "D-076 (veredicto NO CONVALIDADO + deuda regime())"
+    ],
+    "datos": {
+      "fuente": "REUSA el dataset D1 de F2 (MT5 demo copy_rates, 5 simbolos, 1200 barras c/u)",
+      "split": "MISMO eje que F2, importado de backtest_cta.py: IS hasta 2024-11-06, embargo 30 dias (40 senales), OOS hasta 2026-10-07"
+    },
+    "motor": {
+      "archivo": "research/mr.py (puro, sin pandas)",
+      "entrada": "senal CONTRARIA al cierre de i: cierre > VWAP+2*ATR -> SHORT, < VWAP-2*ATR -> LONG; fill al open de i+1 (sin lookahead)",
+      "salida": "target fijo = VWAP de la barra de senal; SL = fill -/+ 2*ATR; SL PRIMERO si la misma barra toca ambos; hueco solo empeora el SL, TP llena en target exacto; max_hold 10 barras -> MAX_HOLD/END_OF_DATA",
+      "tamano": "igual que F2: vol_target_lots (equity 100k, vol_target 0.10) + friccion 1 tick/lado con tick_size real"
+    },
+    "interruptor": "backtest_mr.py evalua regime(candles[:i+1], lookback=60) en la barra de senal y solo opera si regime=='rango'; corre ademas la MISMA estrategia SIN gate como referencia",
+    "parametros_sin_calibrar": "VWAP 20, k de bandas 2.0, SL_K 2.0, max_hold 10, ATR 14 (decididos antes de ver el resultado; D-065)",
+    "perf": {
+      "con_gate": "0 fills: 1254/1296 senales saltadas por regime=='expansion', 40 embargo, 2 sin barra de fill -> INCONCLUSIVE por construccion",
+      "referencia_sin_gate_is": "n=183, win 43.2%, exp -59.23 USD, ticks -283.5, PF 0.886, maxDD -16322",
+      "referencia_sin_gate_oos": "n=120, win 47.5%, exp -16.83 USD, ticks -406.1, PF 0.968, maxDD -15051"
+    },
+    "diagnostico_regime": {
+      "heuristica": "ratio = span(60 barras)/cuerpo_medio; >=6 expansion, <=3 rango (umbrales hardcodeados en core/risk_engine.py)",
+      "d1": "p50 ~15 sobre 6000 barras; 1 sola barra de 'rango' (GBPUSD)",
+      "m15": "5000 barras x 5 simbolos (la temporalidad que alimenta produccion, mt5_market.py DEFAULT_TIMEFRAME='M15'): 100% expansion",
+      "test": "tests/unit/test_risk_engine.py::TestRegime solo asserta 'que corra', nunca que cada estado dispare",
+      "impacto_hoy": "regime() solo se muestra en el panel; NINGUN gate en vivo lo lee -> impacto funcional cero",
+      "deuda": "validar/calibrar umbrales 6.0/3.0 contra datos reales con tests de los tres estados; tocar core/ es decision futura"
+    },
+    "veredicto": "NO CONVALIDADO: (1) con el gate, INCONCLUSIVE por construccion (nunca abre); (2) sin gate, no supera la friccion en OOS (PF 0.968, -406 ticks). El MR VWAP queda FUERA de F4/F5",
+    "suite": "1555 passed, 2 xfailed (antes de F3: 1537 passed, 2 xfailed)",
+    "tests": [
+      "tests/unit/test_mr.py (18 deterministas: vwap, bandas, senales, SL primero, hueco, MAX_HOLD, END_OF_DATA)"
+    ],
+    "validacion": [
+      "py_compile OK",
+      "lineas de core/ <= 170 (no se toco core/)",
+      "ruff NO instalado en el entorno; validacion via suite + py_compile"
+    ],
+    "resultado_json": "trinity_data/research/results/backtest_mr_20261007T131624Z.json",
+    "pendiente_f3": "deuda regime() (umbrales sin validar contra datos) + clave Databento (usuario); MR se revalidaria si cambian sus parametros o el interruptor"
   }
 }
