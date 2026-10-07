@@ -544,4 +544,31 @@ superen la convalidación OOS (nada más correcto que el backtest para decidirlo
 - Pendiente de F1 (fase 2, al desplegar, no ahora): topes por perfil y `strategy_<perfil>.yaml`.
 - Validación: `py_compile` OK; líneas de `core/` ≤ 170 (máx. 95). Ruff no instalado en el entorno.
 
-**Siguiente fase:** F2 – convalidación del CTA Swing en `research/` (D1 MT5 demo, IS/OOS + embargo + fricción).
+### Sub-hito "F2 – Convalidación del CTA Swing D1" (cerrado, D-073/D-074)
+
+**Fecha:** 2026-10-06 | **Estado:** CONVALIDA en OOS (verdict PASS); sin tocar la ejecución.
+
+- `research/build_cta_candles.py`: D1 de MT5 demo (MetaQuotes-Demo, cuenta 112125897) para
+  EURUSD/XAUUSD/US500/GBPUSD/AUDUSD, 1.200 barras cada uno, Parquet + sidecar sha256 + specs
+  en `trinity_data/research/cta/d1/` (fuera del repo).
+- `research/cta.py` (motor puro, sin pandas): `atr` (Wilder RMA), `donchian` (inclusivo),
+  `breakout_signals` (cierre de `i` vs canal hasta `i−1`, sin lookahead), `chandelier`/
+  `update_trail` (ratchet que nunca afloja), `simulate_trade` (exit por trail o gap-open,
+  censurado "END_OF_DATA", MFE/MAE raw). 14 tests deterministas de lápiz en
+  `tests/unit/test_cta.py`.
+- `core/lot_calculator.py`: `vol_target_lots` + `TRADING_DAYS` + `VOL_TARGET_DEFAULT`; NO en
+  `CALCULATORS` (el registro despacha por riesgo a SL; vol-target es otra pregunta). 7 tests
+  `TestVolTarget`.
+- `research/backtest_cta.py`: réplica IS/OOS/embargo+fricción del pipeline de 6E. Split del
+  span real: IS hasta 2024-11-06, embargo 30d (20 señales como contexto), OOS hasta fin.
+  Parámetros fijados sin calibración (ATR 14, Donchian 20, k=3, vol_target 0.10, equity 100k,
+  fricción 1 tick/lado con tick_size real por símbolo).
+- **Resultado:** IS 106 trades, win 39,6 %, exp +75,74 USD (PF 1,135); OOS 73 trades, win
+  38,4 %, exp +117,09 USD (PF 1,176). `OOS exp_ticks_net +1.797 > 0` con la fricción ya
+  descontada ⟹ **gate "OOS supera la fricción" CUMPLIDO**. Referencia Donchian 55: OOS 47
+  trades, +150,99 USD/trade. Mayor ganador verificado barra a barra (XAUUSD trailing).
+- Suite completa tras F2: **1537 passed, 2 xfailed** (antes de F2: 1515).
+- Pendiente de F2 (fases F4/F5): ejecutar el CTA requiere perfil propio + `exit_policy.py`
+  + modo alerta `auto_execute=false`; `regime()` es el árbitro hasta entonces.
+
+**Siguiente fase:** F3 – convalidación Mean Reversion (VWAP) + `regime()` como interruptor.

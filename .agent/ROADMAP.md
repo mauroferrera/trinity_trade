@@ -199,7 +199,7 @@ Ver `DECISIONS.md` (D-005) y `PROJECT_STATE.json` (`reference_code`).
 - [ ] Revalidación futura si cambian el gate o la mecánica de fills (pipeline reproducible)
 
 ## Hoja de ruta multi-estrategia (D-071) — CTA Swing + Mean Reversion + Copilot + ILOF
-**Estado:** F0 y F1 entregadas (2026-10-06) | **Prioridad:** Media-alta (después de cerrar 6E)
+**Estado:** F0, F1 y F2 entregadas (2026-10-06) | **Prioridad:** Media-alta (después de cerrar 6E)
 
 Principios (no negociables): convalidación antes que conexión (nada en vivo sin veredicto OOS);
 `ExecutionService` = única puerta de salida; `regime()` = árbitro de desactivación mutua; los
@@ -215,9 +215,14 @@ suite en verde como criterio de aceptación.
   `trades_by_magic`/`profiles_by_magic`. Sin cambios de ejecución (regla de oro F1). Suite
   `1515 passed, 2 xfailed`. Queda F1-fase2 (topes por perfil al desplegar, no ahora).
   ILOF = "módulo presente en investigación".
-- [ ] **F2 – Convalidación CTA en `research/`**: OHLCV D1 de MT5 demo (EURUSD, XAUUSD, US500,
-  GBPUSD, AUDUSD, 2 años), simulador breakout próximo-open + trailing ATR + vol-targeting en
-  `lot_calculator`; réplica IS/OOS + embargo + fricción. **Gate: solo pasa si OOS supera la fricción.**
+- [x] **F2 – Convalidación CTA en `research/`** (D-073/D-074): OHLCV D1 de MT5 demo (EURUSD,
+  XAUUSD, US500, GBPUSD, AUDUSD, ~4,7 años), simulador breakout próximo-open + trailing ATR +
+  vol-targeting en `lot_calculator`; réplica IS/OOS + embargo + fricción. **Veredicto: PASS** —
+  OOS 73 trades, win 38,4 %, exp +117,09 USD/trade (PF 1,176); con la fricción (1 tick/lado)
+  ya descontada, `exp_ticks_net` positivo = "OOS supera la fricción". Referencia Donchian 55:
+  OOS 47 trades, +150,99 USD/trade. Suite `1537 passed, 2 xfailed`. Sin calibración (parámetros
+  clásicos fijados antes de ver el resultado). Detalle en `MEJORAS_CTA_D1.md`.
+              **Gate cumplido: solo pasa si OOS supera la fricción → PASS.**
 - [ ] **F3 – Convalidación Mean Reversion (VWAP)**: mismo proceso; `regime()` como interruptor
   (expansión→ILOF+CTA, compresión→VWAP, noticias→solo Copilot).
 - [ ] **F4 – Despliegue en alerta**: módulos validados corren simulados con su magic y perfil.

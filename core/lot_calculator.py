@@ -32,8 +32,11 @@ from typing import Any, Dict, Optional
 __all__ = [
     "LotSpec",
     "MIN_LOT",
+    "TRADING_DAYS",
+    "VOL_TARGET_DEFAULT",
     "standard_forex_lots",
     "risk_per_unit",
+    "vol_target_lots",
     "b3_mini_contracts",
     "b3_bonds",
     "crypto_notional_usdt",
@@ -45,6 +48,15 @@ __all__ = [
 # de MT5 para forex y también el de los minicontratos B3, así que sirve de
 # mínimo global cuando el spec no declara otro.
 MIN_LOT = 1.0
+
+# Días de trading al año con que se anualiza la volatilidad objetivo (1 año =
+# 252 sesiones D1). Es un convenio de reporte, no una fecha de calendario.
+TRADING_DAYS = 252.0
+
+# Volatilidad anuada objetivo por defecto del CTA (F2): el tamaño de la
+# posición se fija para que su vol diaria esperada sea una fracción del equity,
+# repartida en raíz de días de trading.
+VOL_TARGET_DEFAULT = 0.10
 
 
 class LotSpec:
@@ -198,6 +210,59 @@ def standard_forex_lots(risk_amount: float, sl_distance: float, spec: LotSpec) -
     """
     risk_per_lot = _risk_per_unit(sl_distance, spec, "lote")
     return _finish(risk_amount / risk_per_lot, spec, risk_per_lot)
+
+
+def vol_target_lots(
+    equity: float,
+    atr: float,
+    spec: LotSpec,
+    vol_target: float = VOL_TARGET_DEFAULT,
+) -> Dict[str, Any]:
+    """Lotes para que la vol diaria de la posición (ATR) sea vol_target del equity.
+
+    Vol-targeting del CTA (F2, D-071): el tamaño NO se deriva de un riesgo fijo
+    hasta un SL, sino de una volatilidad OBJETIVO. Un símbolo con más rango (mayor
+    ATR) recibe menos lotes: cada posición aporta la misma vol diaria esperada al
+    equity, independientemente de lo que se mueva el instrumento ese día.
+
+    `atr` va en UNIDADES DE PRECIO del símbolo (rango medio de la vela D1). Una
+    posición de UN lote mueve, en dinero de la cuenta, `tick_value` por cada tick
+    de precio, así que una vela de `atr` de amplitud mueve:
+        per_lot = tick_value * atr / tick_size
+    en divisa de la cuenta. El objetivo diario es el vol anual repartido en raíz
+    de días de trading:
+        objetivo_diario = equity * vol_target / sqrt(TRADING_DAYS)
+
+    NO entra en `CALCULATORS`: ese registro despacha por riesgo hasta un SL
+    (`calculate_size` siempre pasa `risk_amount`+`sl_distance`), y el vol-target
+    es otra clase de pregunta, no una especialización de la misma.
+    """
+    if equity <= 0:
+        raise ValueError(f"equity debe ser > 0, recibido {equity}")
+    if atr <= 0:
+        raise ValueError(f"atr debe ser > 0, recibido {atr}")
+    if not 0.0 < vol_target <= 1.0:
+        raise ValueError(
+            f"vol_target debe estar en (0, 1], recibido {vol_target}"
+        )
+    objetivo_diario = equity * vol_target / math.sqrt(TRADING_DAYS)
+    per_lot = spec.tick_value * atr / spec.tick_size
+    if per_lot <= 0:
+        raise ValueError(
+            f"vol diaria por lote nula (tick_value={spec.tick_value}, "
+            f"atr={atr}, tick_size={spec.tick_size}). Un ATR que no mueve dinero "
+            "no es riesgo cero: es un spec que no se puede dimensionar."
+        )
+    stepped = _round_down(objetivo_diario / per_lot, spec.lot_step)
+    clamped = stepped < spec.min_lot
+    if clamped:
+        stepped = spec.min_lot
+    return {
+        "lots": round(stepped, 8),
+        "clamped_to_min": clamped,
+        "target_daily_vol": round(objetivo_diario, 8),
+        "position_daily_vol": round(stepped * per_lot, 8),
+    }
 
 
 def b3_mini_contracts(risk_amount: float, sl_distance: float, spec: LotSpec) -> Dict[str, Any]:

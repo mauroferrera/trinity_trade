@@ -2,7 +2,7 @@
   "project_name": "MultiMarket Quant Engine",
   "version": "0.1.0",
   "active_phase": "Phase 7 - Multi-mercado (forex + B3 + cripto)",
-  "status": "f1_infraestructura_multi_perfil_entregada_en_verde_sin_tocar_la_ejecucion",
+  "status": "f2_cta_convalidado_en_verde_oos_supera_la_friccion_sin_tocar_la_ejecucion",
   "last_updated": "2026-10-06",
   "blockers": [],
   "repo": {
@@ -141,7 +141,14 @@
     "api/services/mt5_market.py::daily_risk_state expone trades_by_magic y profiles_by_magic (F1)",
     "tests/unit/test_strategy_map.py (F1, 29 tests)",
     "tests/unit/test_api_market_port.py::Deal.magic + 3 tests de exposicion por magic/perfil (F1)",
-    "tests/unit/test_store.py::FakeConfigSource.strategy_map + 2 tests del seam (F1)"
+    "tests/unit/test_store.py::FakeConfigSource.strategy_map + 2 tests del seam (F1)",
+    "research/build_cta_candles.py (F2/D-073): D1 MT5 demo (EURUSD/XAUUSD/US500/GBPUSD/AUDUSD, 1200 barras c/u) + sidecar sha256 y specs",
+    "research/cta.py (F2/D-073): motor puro (atr Wilder, donchian, breakout proximo-open sin lookahead, trailing chandelier ratchet, simulate_trade)",
+    "core/lot_calculator.py::vol_target_lots + TRADING_DAYS + VOL_TARGET_DEFAULT (F2/D-073; NO en CALCULATORS)",
+    "research/backtest_cta.py (F2/D-074): replica IS/OOS/embargo + friccion 1 tick/lado, verdict 'OOS supera la friccion'",
+    "tests/unit/test_cta.py (F2, 14 tests deterministas) + TestVolTarget en test_lot_calculator.py (F2, 7 tests)",
+    "MEJORAS_CTA_D1.md (F2/D-074): historico de diseno, split y veredicto PASS",
+    "backtest CTA D1: dataset (6.000 barras), JSON de resultados y veredicto PASS en trinity_data, fuera del repo"
   ],
   "in_progress": [
     "el bucle del watcher: cuando exista, entra por ExecutionService (D-063). El scan por HTTP ya esta."
@@ -750,7 +757,7 @@
     "fases": [
       "F0 - Cierre limpio de 6E (solo administrativo: commit + docs de research/, sin deploy demo); ROTAR DATABENTO_API_KEY DEJADO COMO ESTA por decision del usuario",
       "F1 - Infraestructura multi-perfil: strategy_map (magic->perfil), strategy_<perfil>.yaml via STRATEGY_PATH, sl_distance_by_symbol -> by_profile_by_symbol, daily_risk_state con DD/topes por magic y global; ILOF = modulo presente en investigacion",
-      "F2 - Convalidacion CTA en research/: OHLCV D1 de MT5 demo (EURUSD, XAUUSD, US500, GBPUSD, AUDUSD, 2 anios), breakout proximo-open + trailing ATR + vol-targeting en lot_calculator; GATE: solo pasa si OOS supera la friccion",
+      "F2 - Convalidacion CTA en research/: OHLCV D1 de MT5 demo (EURUSD, XAUUSD, US500, GBPUSD, AUDUSD, ~4,7 anios), breakout proximo-open + trailing ATR + vol-targeting en lot_calculator; GATE cumplido (OOS supera la friccion) -> CONVALIDA, Veredicto PASS (D-074)",
       "F3 - Convalidacion Mean Reversion (VWAP): mismo proceso; regime() como interruptor",
       "F4 - Despliegue en alerta: modulos validados corren simulados con su magic y perfil, cero ordenes reales",
       "F5 - Ejecucion multi-estrategia: activacion via ExecutionService con plan y exit_policy por perfil (nuevo core/exit_policy.py para trailing D1); Copilot manual siempre abierto"
@@ -808,5 +815,52 @@
       "tests/unit/test_store.py (+2 seam)"
     ],
     "pendiente_f1_fase2": "strategy_<perfil>.yaml via STRATEGY_PATH y topes por perfil al desplegar (F2+)"
+  },
+  "f2_cta": {
+    "hito": "F2 - Convalidacion del CTA Swing D1 (breakout Donchian + trailing chandelier + vol-targeting)",
+    "fecha": "2026-10-06",
+    "estado": "CONVALIDA en OOS (verdict PASS); gate 'OOS supera la friccion' cumplido; sin tocar la ejecucion",
+    "decisiones": [
+      "D-071 (roadmap)",
+      "D-073 (diseno del motor y del backtest)",
+      "D-074 (veredicto PASS)"
+    ],
+    "datos": {
+      "fuente": "MT5 demo copy_rates D1 (MetaQuotes-Demo, cuenta 112125897)",
+      "simbolos": [
+        "EURUSD", "XAUUSD", "US500", "GBPUSD", "AUDUSD"
+      ],
+      "barras_por_simbolo": 1200,
+      "raiz": "trinity_data/research/cta/d1/ (fuera del repo)"
+    },
+    "motor": {
+      "entrada": "breakout Donchian: close[i] vs canal de las n barras ANTERIORES (sin lookahead), fill al open de i+1",
+      "salida": "trailing chandelier extremo - k*ATR que solo ratchea; hueco -> fill al open",
+      "tamano": "core/lot_calculator::vol_target_lots (equity 100k, vol_target 0.10) - NO en CALCULATORS",
+      "friccion": "1 tick adverso por lado, con el tick_size REAL de cada simbolo"
+    },
+    "parametros_sin_calibrar": "ATR 14 (Wilder), Donchian 20 (55 solo referencia), k=3, vol_target 0.10 (decididos antes de ver el resultado; D-065)",
+    "split": {
+      "is_end": "2024-11-06",
+      "embargo": "30 dias (20 senales de contexto descartadas)",
+      "oos_end": "2026-10-07"
+    },
+    "perf": {
+      "is": "n=106, win 39.6%, exp +75.74 USD, ticks +608.4, PF 1.135, maxDD -12099",
+      "oos": "n=73, win 38.4%, exp +117.09 USD, ticks +1797.4, PF 1.176, maxDD -11990",
+      "referencia_donchian_55_oos": "n=47, exp +150.99 USD/trade, PF 1.212"
+    },
+    "veredicto": "PASS: OOS exp_ticks_net > 0 con la friccion (1 tick/lado) ya descontada = OOS supera la friccion",
+    "suite": "1537 passed, 2 xfailed (antes de F2: 1515 passed, 2 xfailed)",
+    "tests": [
+      "tests/unit/test_cta.py (14 deterministas, incluye no-lookahead del trailing)",
+      "tests/unit/test_lot_calculator.py::TestVolTarget (7)"
+    ],
+    "validacion": [
+      "py_compile OK",
+      "lineas de core/ <= 170 (limite del repo)",
+      "ruff NO instalado en el entorno; validacion via suite + py_compile"
+    ],
+    "pendiente_f2": "ejecutar el CTA es F4/F5: perfil propio + core/exit_policy.py (trailing D1) + modo alerta auto_execute=false; regime() es el arbitro hasta entonces"
   }
 }

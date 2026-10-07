@@ -1209,3 +1209,44 @@ los módulos nuevos solo se validan en tests (`tests/unit/test_strategy_map.py`,
 Lint: ruff no está instalado en el entorno (ni en el PATH ni como módulo), la validación de F1 es
 `py_compile` + límite de 170 chars en `core/` (máx. observado 95) + suite completa
 `1515 passed, 2 xfailed` (antes de F1: `1477 passed, 2 xfailed`).
+
+### D-073 - Diseño de la convalidación del CTA Swing D1: motor puro en `research/`, vol-targeting en `lot_calculator`, sin calibración
+
+F2 se planta como convalidación, no optimización (D-065): `research/cta.py` (módulo PURO,
+sin pandas/numpy, listas alineadas con `None` en warm-up) implementa la estrategia con tres
+piezas decididas ANTES de ver los datos: entrada por breakout de Donchian del cierre de `i`
+contra el canal de las `n` barras ANTERIORES (`upper[i-1]`/`lower[i-1]`, sin lookahead —
+decidir con el rango de la propia barra sería decidir con el futuro del fill, que va al open
+de `i+1`); salida con trailing chandelier `extremo − k×ATR` que SOLO ratchea (el chandelier
+nunca afloja) donde el stop de la barra `k` usa el extremo de `k−1` y el hueco se rellena al
+open (peor precio); y tamaño por VOL-TARGETING en `core/lot_calculator.py::vol_target_lots`
+(`objetivo_diario = equity×vol_target/sqrt(252)`, `per_lot = tick_value×ATR/tick_size`, floor
+a `lot_step`, clamp a `min_lot`) que NO entra en `CALCULATORS` porque ese registro despacha
+por riesgo hasta un SL y el vol-target es otra clase de pregunta. Datos: `build_cta_candles.py`
+descarga D1 de MT5 demo (MetaQuotes-Demo, cuenta 112125897) para EURUSD/XAUUSD/US500/GBPUSD/
+AUDUSD, 1.200 barras cada uno (~4,7 años), Parquet + sidecar sha256 + specs (tick_size/tick_
+value) en `trinity_data` (D-064), fuera del repo. La aritmética se fija con tests deterministas
+de lápiz (`tests/unit/test_cta.py`, 14) — incluido `test_sin_lookahead_en_el_trailing`, que
+prohíbe ratchear con el rango de la barra que dispara — y `tests/unit/test_lot_calculator.py`
+gana `TestVolTarget` (7). Validación F1/F2: ruff NO instalado en el entorno; `py_compile` +
+límite 170 chars en `core/` + suite en verde.
+
+### D-074 - Veredicto F2: el CTA Swing D1 CONVALIDA en OOS (la esperanza neta positiva ya supera la fricción)
+
+Ejecutado `research/backtest_cta.py` (réplica IS/OOS/embargo + fricción del pipeline de 6E)
+sobre el dataset D1 real (6.000 barras, split derivado del span: IS hasta 2024-11-06, embargo
+30 días —20 señales descartadas como contexto—, OOS hasta fin, parámetros fijados sin mirar
+el resultado: ATR 14 Wilder, Donchian 20, k=3, vol_target 0.10, equity 100k, 1 tick de
+fricción por lado con el tick_size REAL de cada símbolo). Resultado: **IS 106 trades,
+win 39,6 %, exp +75,74 USD (PF 1,135, maxDD −12.099)**; **OOS 73 trades, win 38,4 %,
+exp +117,09 USD (PF 1,176, maxDD −11.990)**. El gate de la F2 es "OOS supera la fricción":
+como la fricción (1 tick/lado) ya va DESCONTADA en el neto, `OOS exp_ticks_net` positivo
+(+1.797,4 ticks) es exactamente eso ⟹ **verdict PASS**. Refuerzo de robustez: con Donchian 55
+(ventana de solo lectura) OOS sigue positivo (47 trades, +150,99 USD/trade, PF 1,212), y el
+perfil IS/OOS es coherente (misma win rate ~39 %, ganador medio ~2× el perdedor medio, mismo
+signo). El mayor ganador se verificó barra a barra contra el parquet (XAUUSD long 2025-08-28,
+fill 3.417,06 → trailing 4.136,50, 37 días, MAE 209 $): el edge que mide el backtest es el
+mismo que produce el simulador. El CTA NO se ejecuta todavía: convalida (F2) y ejecutar es
+F4/F5 (perfil propio + `exit_policy.py` + modo alerta `auto_execute=false`, D-071). Registro:
+`MEJORAS_CTA_D1.md`, ROADMAP/CHECKLIST/PROJECT_STATE. Suite completa tras F2: **1537 passed,
+2 xfailed** (antes de F2: 1515).

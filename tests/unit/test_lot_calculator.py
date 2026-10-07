@@ -259,6 +259,79 @@ class TestMinLotAndRounding:
         assert str(r["lots"])
 
 
+class TestVolTarget:
+    """Vol-targeting del CTA (F2): tamaño por volatilidad objetivo, no por SL.
+
+    La pregunta no es "cuánto arriesgo hasta el stop" sino "cuánto lote para que
+    la vol diaria esperada de la posición sea vol_target del equity". Un símbolo
+    con más rango recibe menos lotes: cada posición aporta la misma vol diaria.
+    """
+
+    def test_formula_canonica(self):
+        # Equity 100k, vol objetivo 10% anual: diaria = 100k*0.10/sqrt(252)
+        # ≈ 629.94 USD. EURUSD con ATR de 0.0010 (100 ticks) mueve
+        # tick_value*atr/tick_size = 1.0*0.0010/0.00001 = 100 USD por lote.
+        r = lc.vol_target_lots(100_000.0, 0.0010, EURUSD)
+        target = 100_000.0 * lc.VOL_TARGET_DEFAULT / (252.0 ** 0.5)
+        assert r["lots"] == pytest.approx(6.29, abs=0.01)
+        assert r["target_daily_vol"] == pytest.approx(target, rel=1e-6)
+        assert r["position_daily_vol"] == pytest.approx(
+            r["lots"] * 100.0, rel=1e-9)
+        assert r["clamped_to_min"] is False
+
+    def test_mas_atr_menos_lotes(self):
+        """La invariancia central del vol-target: más rango, misma vol objetivo.
+
+        El floor a pasos del broker rompe la igualdad exacta (6.30 vs 12.60 ->
+        6.29 vs 12.58): se acepta el desvío de UN paso, que es la granularidad del
+        instrumento.
+        """
+        raro = lc.vol_target_lots(100_000.0, 0.0020, EURUSD)
+        normal = lc.vol_target_lots(100_000.0, 0.0010, EURUSD)
+        assert raro["lots"] < normal["lots"]
+        assert abs(raro["lots"] - normal["lots"] / 2.0) <= EURUSD.lot_step
+
+    def test_equity_doble_lotes_doble(self):
+        a = lc.vol_target_lots(50_000.0, 0.0010, EURUSD)
+        b = lc.vol_target_lots(100_000.0, 0.0010, EURUSD)
+        assert abs(b["lots"] - 2.0 * a["lots"]) <= EURUSD.lot_step
+
+    def test_vol_target_escalado_lineal(self):
+        # 5% anual = la mitad del default: la mitad de lotes (con tolerancia al paso).
+        med = lc.vol_target_lots(100_000.0, 0.0010, EURUSD,
+                                 vol_target=lc.VOL_TARGET_DEFAULT / 2.0)
+        defa = lc.vol_target_lots(100_000.0, 0.0010, EURUSD)
+        assert abs(med["lots"] - defa["lots"] / 2.0) <= EURUSD.lot_step
+
+    def test_redondeo_a_pasos_del_broker(self):
+        r = lc.vol_target_lots(100_000.0, 0.0010, EURUSD)
+        assert round(r["lots"] / 0.01, 6) == pytest.approx(
+            round(r["lots"] / 0.01, 6))
+
+    def test_minimo_del_broker_se_reporta(self):
+        # Equity minúsculo y ATR enorme: el nivel de vol objetivo exigiría
+        # fracciones de lote que el broker no negocia; se sube al mínimo y se marca.
+        r = lc.vol_target_lots(100.0, 0.1000, EURUSD)
+        assert r["lots"] == pytest.approx(EURUSD.min_lot)
+        assert r["clamped_to_min"] is True
+
+    def test_entradas_invalidas_son_error(self):
+        with pytest.raises(ValueError):
+            lc.vol_target_lots(0.0, 0.0010, EURUSD)
+        with pytest.raises(ValueError):
+            lc.vol_target_lots(100_000.0, 0.0, EURUSD)
+        with pytest.raises(ValueError):
+            lc.vol_target_lots(100_000.0, -0.0010, EURUSD)
+        with pytest.raises(ValueError):
+            lc.vol_target_lots(100_000.0, 0.0010, EURUSD, vol_target=0.0)
+        with pytest.raises(ValueError):
+            lc.vol_target_lots(100_000.0, 0.0010, EURUSD, vol_target=1.5)
+
+    def test_no_contamina_el_registro_de_calculadores(self):
+        """El vol-target no despacha por `calculate_size`: es otra clase de pregunta."""
+        assert "vol_target_lots" not in lc.CALCULATORS
+
+
 class TestLotSpec:
     def test_from_dict_acepta_alias(self):
         spec = lc.LotSpec.from_dict({
