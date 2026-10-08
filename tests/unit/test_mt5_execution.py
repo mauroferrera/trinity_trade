@@ -85,6 +85,7 @@ def test_constantes_coinciden_con_el_paquete(mt5):
     assert mt5_execution.ORDER_TYPE_BUY == mt5.ORDER_TYPE_BUY == 0
     assert mt5_execution.ORDER_TYPE_SELL == mt5.ORDER_TYPE_SELL == 1
     assert mt5_execution.TRADE_ACTION_DEAL == mt5.TRADE_ACTION_DEAL == 1
+    assert mt5_execution.TRADE_ACTION_SLTP == mt5.TRADE_ACTION_SLTP == 3
     assert mt5_execution.ORDER_TIME_GTC == mt5.ORDER_TIME_GTC == 0
     assert mt5_execution.ORDER_FILLING_FOK == mt5.ORDER_FILLING_FOK == 0
     assert mt5_execution.ORDER_FILLING_IOC == mt5.ORDER_FILLING_IOC == 1
@@ -442,6 +443,120 @@ def test_cierre_rechazado_no_cierra_nada_falso(ejec, mt5):
     assert res["status"] == "rejected"
     assert res["retcode"] == 10018
     assert "cerrado" in res["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Modificación de stops: el trailing del CTA (F5)
+# ---------------------------------------------------------------------------
+
+
+def test_modificar_manda_sltp_con_los_niveles_y_sin_lo_que_no_toca(ejec, mt5):
+    """`TRADE_ACTION_SLTP` mueve campos de una posición que YA existe.
+
+    La petición lleva `symbol` y `position`, y nada de volumen, precio ni magic:
+    no se abre ni se cierra nada, y la posición sigue siendo la misma. Preservar
+    el magic aquí sería un error de bulto: SLTP no lo lleva.
+    """
+    mt5.positions = [FakePosition(ticket=555, symbol="EURUSD", type=0, volume=0.10,
+                                  magic=8882026, price_open=1.10000,
+                                  sl=1.09900, tp=1.10200)]
+    res = ejec.modify_position(555, sl=1.09950, tp=1.10250)
+    assert res["ok"] is True
+    assert res["status"] == "modified"
+    assert res["magic"] == 8882026
+    assert res["sl"] == pytest.approx(1.09950)
+    assert res["tp"] == pytest.approx(1.10250)
+    peticion = mt5.orders_sent[0]
+    assert peticion["action"] == mt5_execution.TRADE_ACTION_SLTP == 3
+    assert peticion["symbol"] == "EURUSD"
+    assert peticion["position"] == 555
+    assert "volume" not in peticion
+    assert "price" not in peticion
+    assert "magic" not in peticion
+
+
+def test_modificar_sin_tp_conserva_el_que_tiene(ejec, mt5):
+    """El bróker pisa los DOS campos con lo que recibe: `None` se manda como el actual.
+
+    Enviar solo `sl` sin `tp` (o al revés) con el campo ausente le pondría cero
+    al nivel que no se quería tocar, que es una forma silenciosa de quitar un
+    objetivo que nadie pidió quitar.
+    """
+    mt5.positions = [FakePosition(ticket=555, symbol="EURUSD", sl=1.09900, tp=1.10200)]
+    ejec.modify_position(555, sl=1.09950)
+    assert mt5.orders_sent[0]["sl"] == pytest.approx(1.09950)
+    assert mt5.orders_sent[0]["tp"] == pytest.approx(1.10200)
+
+
+def test_modificar_sin_sl_conserva_el_que_tiene(ejec, mt5):
+    mt5.positions = [FakePosition(ticket=555, symbol="EURUSD", sl=1.09900, tp=1.10200)]
+    ejec.modify_position(555, tp=1.10300)
+    assert mt5.orders_sent[0]["sl"] == pytest.approx(1.09900)
+    assert mt5.orders_sent[0]["tp"] == pytest.approx(1.10300)
+
+
+def test_un_cero_explícito_quita_el_nivel(ejec, mt5):
+    """0.0 es la forma en que MT5 entiende "sin nivel"; None es "no lo toques"."""
+    mt5.positions = [FakePosition(ticket=555, symbol="EURUSD", sl=1.09900, tp=1.10200)]
+    ejec.modify_position(555, sl=1.09950, tp=0.0)
+    assert mt5.orders_sent[0]["sl"] == pytest.approx(1.09950)
+    assert mt5.orders_sent[0]["tp"] == 0.0
+
+
+def test_el_stop_nuevo_se_alinea_a_la_rejilla(ejec, mt5):
+    """Un stop off-grid se rechaza con 10016: se redondea ANTES de mandarlo."""
+    mt5.positions = [FakePosition(ticket=555, symbol="EURUSD", sl=1.09900, tp=1.10200)]
+    ejec.modify_position(555, sl=1.0987654321)
+    assert mt5.orders_sent[0]["sl"] == pytest.approx(1.09877)
+
+
+def test_modificar_un_ticket_que_no_existe_no_inventa_nada(ejec, mt5):
+    res = ejec.modify_position(999999, sl=1.09950)
+    assert res["ok"] is False
+    assert res["status"] == "no_position"
+    assert mt5.orders_sent == []
+
+
+def test_modificar_un_ticket_invalido_no_toca_el_broker(ejec, mt5):
+    res = ejec.modify_position("lo-que-sea", sl=1.09950)
+    assert res["ok"] is False
+    assert res["status"] == "no_position"
+    assert mt5.orders_sent == []
+
+
+def test_modificar_rechazado_dice_el_motivo_del_broker(ejec, mt5):
+    mt5.positions = [FakePosition(ticket=555, symbol="EURUSD", sl=1.09900, tp=1.10200)]
+    mt5.order_send_results = FakeTradeResult(retcode=10016, comment="Invalid stops")
+    res = ejec.modify_position(555, sl=1.10500)
+    assert res["ok"] is False
+    assert res["status"] == "rejected"
+    assert res["retcode"] == 10016
+    assert "Invalid stops" in res["error"]
+
+
+def test_modificar_sin_respuesta_no_es_un_rechazo(ejec, mt5):
+    """`None` = ausencia de respuesta, dicha como tal para que quien llama reintente.
+
+    Y es UNA sola petición, no un bucle: mover un stop no compra ni vende, no hay
+    relleno que rotar ni precio que actualizar, reintentar sería duplicar esfuerzo
+    sin aprender nada.
+    """
+    mt5.positions = [FakePosition(ticket=555, symbol="EURUSD", sl=1.09900, tp=1.10200)]
+    mt5.order_send_results = None
+    res = ejec.modify_position(555, sl=1.09950)
+    assert res["ok"] is False
+    assert res["status"] == "sin_respuesta"
+    assert res["retcode"] is None
+    assert "None" in res["error"]
+    assert len(mt5.orders_sent) == 1
+
+
+def test_modificar_con_la_terminal_caida_es_sin_terminal(ejec, mt5):
+    mt5.initialize_ok = False
+    res = ejec.modify_position(555, sl=1.09950)
+    assert res["ok"] is False
+    assert res["status"] == "sin_terminal"
+    assert mt5.orders_sent == []
 
 
 # ---------------------------------------------------------------------------

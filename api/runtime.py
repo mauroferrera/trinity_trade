@@ -216,6 +216,12 @@ class Runtime:
         `setup_log` en cada llamada. Se construye en el primer uso, no en el arranque:
         `import Runtime` no toca la config, y el CTA no hace nada solo.
 
+        El puerto de ejecución es un `ExecutionService` construido con las piezas de
+        este runtime (`execution_from`): el CTA manda órdenes por el mismo servicio
+        que el watcher, con las mismas puertas (riesgo, noticias, whitelist, deriva).
+        Si no hubiera bróker, el puerto existe pero degrada con `sin_terminal`, y la
+        preguntas e "¿hay puerto?" y "¿hay terminal?" siguen siendo dos.
+
         Si alguien cambia el mercado con `set_market`, el servicio se descarta (igual
         que el watcher): escanear contra un mercado que ya no está conectado daría
         `error` en cada símbolo haciéndose el vivo; se prefiere perder la memoria de
@@ -223,8 +229,13 @@ class Runtime:
         """
         if self.cta is None:
             from .services.cta_alert_service import CtaAlertService
+            from .services.execution import execution_from
 
-            self.cta = CtaAlertService(market=self.market, store=self.store)
+            self.cta = CtaAlertService(
+                market=self.market,
+                store=self.store,
+                ejecucion=execution_from(self),
+            )
         return self.cta
 
     def set_market(self, market: Any) -> None:

@@ -1,6 +1,6 @@
-"""El CTA Swing D1 en alerta: evalúa, audita y NO manda órdenes (F4, D-077).
+"""El CTA Swing D1: evalúa, audita y —con el YAML mandando— ejecuta (F4 D-077 · F5 D-078).
 
-Espejo de `test_watcher_service.py` con las tres diferencias que definen F4:
+Espejo de `test_watcher_service.py` con las tres diferencias que definen F4/F5:
 
 1. **Decide en D1 sobre barras CERRADAS.** La señal es el breakout de la última
    barra cerrada (`research/cta.py`, convalidado en F2) y la barra EN FORMACIÓN no
@@ -9,15 +9,23 @@ Espejo de `test_watcher_service.py` con las tres diferencias que definen F4:
 2. **La fila ES el motor convalidado.** El stop sale de `cta.chandelier` con el ATR
    que `cta.atr` calcula sobre las mismas velas: si la fila no coincide con lo que
    dice `research/cta.py`, la alerta no es el sistema que se convalidó en F2.
-3. **Cero órdenes estructural.** No hay puerto de ejecución, ni parámetro que active
-   una orden, ni ruta de auto-execute: se afirma mirando imports y atributos con AST
-   y la firma del constructor, no con un `dry_run: true` que un `order_send` podría
-   acompañar en silencio.
+3. **La ejecución es opt-in y estructural (F5).** El servicio solo ejecuta si
+   `auto_execute` está encendido en `config/strategy_cta.yaml` Y hay puerto de
+   ejecución inyectado; nunca importa `api.services.execution` ni llama `order_send`
+   (AST), y la fila de la orden la escribe `ExecutionService` con sus puertas. Se
+   afirma mirando imports, atributos y firmas con AST, no con un `dry_run: true` que
+   un `order_send` podría acompañar en silencio.
+
+Y una pieza de F5 aparte: `gestionar_salidas()` mueve los stops con la política
+convalidada (`core/exit_policy.py` → `research.cta.update_trail`), ratcheteado con el
+extremo de la última barra CERRADA. `sin_sl` y `sin_cambio` significan "no se tocó
+nada": sin llamada al bróker y sin fila nueva.
 
 Las velas sintéticas están calculadas a mano y verificadas contra el motor: 29
 barras cerradas con rangos de 0.002 (los primeros `tr` son todos 0.002, así que
-`atr = (0.002*13 + 0.037)/14 = 0.0045` en la barra de ruptura) y el cierre de la
-última por encima de todo el canal previo.
+`atr = (0.002*13 + 0.037)/14 = 0.0045` en la barra de ruptura long, y
+`(0.002*13 + 0.065)/14 = 0.0065` en la short) y el cierre de la última por encima
+de todo el canal previo.
 
 Lo que AQUÍ no se prueba: la validación del YAML (`test_strategy_cta_source.py`) y
 las rutas HTTP (`tests/integration/test_api_routes.py`).
@@ -162,12 +170,15 @@ class StoreFalso:
 def _servicio(
     market: Any = None,
     store: Any = None,
+    ejecucion: Any = None,
     perfil: Any = None,
     mapa: Any = None,
 ) -> CtaAlertService:
+    """`ejecucion=None` es "sin puerto": el servicio entero sigue en alerta."""
     return CtaAlertService(
         market=MarketFalso() if market is None else market,
         store=StoreFalso() if store is None else store,
+        ejecucion=ejecucion,
         perfil=(lambda: dict(PERFIL_CTA)) if perfil is None else perfil,
         mapa=(lambda: dict(MAPA_CTA)) if mapa is None else mapa,
     )
@@ -176,6 +187,7 @@ def _servicio(
 def _escanea(
     market: Any = None,
     store: Any = None,
+    ejecucion: Any = None,
     perfil: Any = None,
     mapa: Any = None,
     velas: Optional[List[Dict[str, Any]]] = None,
@@ -184,7 +196,8 @@ def _escanea(
     """`(servicio, cuerpo_del_scan)` con las velas y el reloj ya casados."""
     if market is None:
         market = MarketFalso(velas=_velas() if velas is None else velas)
-    servicio = _servicio(market=market, store=store, perfil=perfil, mapa=mapa)
+    servicio = _servicio(market=market, store=store, ejecucion=ejecucion,
+                         perfil=perfil, mapa=mapa)
     reloj = ahora if ahora is not None else _ahora(market._velas)
     return servicio, servicio.escanear(ahora=reloj)
 
@@ -209,20 +222,58 @@ class TestEstado:
         assert estado["engine"] == {"atr_n": 14, "don_n": 20, "mult": 3.0}
         assert estado["alerts"] == {}
 
-    def test_auto_execute_siempre_apagado_con_su_motivo(self):
-        """Es la lectura de un interruptor que controla algo que no existe hoy.
+    def test_auto_execute_apagado_por_defecto_con_su_motivo(self):
+        """De fábrica el YAML no trae la bandera: el CTA entra en alerta.
 
-        No hay `auto_execute_conf`: el YAML de este perfil ni siquiera tiene la
-        bandera, y publicar un "lo que el YAML pide" que nadie pidió confundiría
-        más que aclarar (D-077).
+        `auto_execute_disponible` SÍ es `True` (el MECANISMO existe desde F5);
+        lo que apaga el ciclo es la config, y `auto_execute_motivo` lo dice.
+        Sin esa distinción, "apagado" y "no puede estar encendido" serían
+        indistinguibles, y un panel no podría explicar por qué.
         """
         estado = _servicio().estado()
 
+        assert estado["auto_execute_conf"] is False
         assert estado["auto_execute"] is False
-        assert estado["auto_execute_disponible"] is False
+        assert estado["auto_execute_disponible"] is True
         assert estado["dry_run"] is True
-        assert "F5" in estado["auto_execute_motivo"]
+        assert "auto_execute" in estado["auto_execute_motivo"]
+        assert "apagado" in estado["auto_execute_motivo"]
         assert "ExecutionService" in estado["auto_execute_motivo"]
+        assert estado["exit_policy"] == "chandelier"
+
+    def test_auto_execute_encendido_cuando_el_yaml_lo_pide_y_hay_puerto(self):
+        """Tres condiciones a la vez —YAML, perfil habilitado y puerto—; con las
+        tres, `estado()` lee el interruptor encendido."""
+        perfil = dict(PERFIL_CTA, auto_execute=True)
+
+        estado = _servicio(ejecucion=object(), perfil=lambda: perfil).estado()
+
+        assert estado["auto_execute_conf"] is True
+        assert estado["auto_execute"] is True
+        assert estado["auto_execute_motivo"] is None
+        assert estado["dry_run"] is False
+
+    def test_el_yaml_lo_pide_sin_puerto_lo_dice_el_motivo(self):
+        """Interruptor encendido sin cable: un "apagado" sin explicación sería
+        un `false` mentiroso, y `estado()` existe para explicar falses."""
+        perfil = dict(PERFIL_CTA, auto_execute=True)
+
+        estado = _servicio(perfil=lambda: perfil).estado()
+
+        assert estado["auto_execute_conf"] is True
+        assert estado["auto_execute"] is False
+        assert estado["dry_run"] is True
+        assert estado["auto_execute_motivo"] == cta_mod.MOTIVO_SIN_PUERTO_DE_EJECUCION
+
+    def test_un_perfil_deshabilitado_gana_sobre_el_yaml_encendido(self):
+        """Sin perfil válido no hay magic ni motor, así que el interruptor no
+        puede encender: el motivo del perfil es el motivo de la ausencia de orden."""
+        perfil = dict(PERFIL_CTA, auto_execute=True, enabled=False)
+
+        estado = _servicio(ejecucion=object(), perfil=lambda: perfil).estado()
+
+        assert estado["auto_execute"] is False
+        assert estado["auto_execute_motivo"] == "perfil.enabled es false"
 
     def test_un_perfil_deshabilitado_lo_dice_con_motivo(self):
         perfil = dict(PERFIL_CTA, enabled=False)
@@ -333,7 +384,8 @@ class TestEscanear:
         assert cuerpo["audit_logged"] == 1
         assert cuerpo["audit_fallidos"] == 0
         assert cuerpo["auto_ejecute"] is False
-        assert cuerpo["auto_ejecute_disponible"] is False
+        assert cuerpo["auto_ejecute_disponible"] is True
+        assert cuerpo["auto_ejecutadas"] == 0
         assert cuerpo["dry_run"] is True
         assert cuerpo["results"] == [
             {"symbol": "EURUSD", "timeframe": "D1", "status": "alerta",
@@ -649,7 +701,7 @@ class TestAuditoria:
 
 
 # ---------------------------------------------------------------------------
-# Cero órdenes (estructural, no una bandera)
+# Estructura de la ejecución (F5): puerto inyectado, cero imports, trailing D1
 # ---------------------------------------------------------------------------
 
 
@@ -667,8 +719,85 @@ def _imports_y_atributos(ruta: Path) -> tuple:
     return imports, atributos
 
 
+class EjecucionFalsa:
+    """El PUERTO inyectado (una `ExecutionService` simulada): registra y responde.
+
+    La firma de `execute_market_trade` es EXACTAMENTE la real: si el servicio
+    llama con un kwarg mal nombrado, el test revienta con `TypeError` aquí, que es
+    donde tiene que reventar. `positions`/`modify_stop` imitan el contrato real
+    (`(filas, error)` y `(cuerpo, status)`).
+    """
+
+    def __init__(
+        self,
+        respuesta: Any = None,
+        status: int = 200,
+        filas: Optional[List[Dict[str, Any]]] = None,
+        error_posiciones: Optional[str] = None,
+        sin_listado: bool = False,
+        modifica_respuesta: Any = None,
+        modifica_status: int = 200,
+        falla: Optional[BaseException] = None,
+    ) -> None:
+        self._respuesta = (respuesta if respuesta is not None
+                           else {"ok": True, "setup_id": 42, "audit_logged": True})
+        self._status = status
+        self._filas = [] if filas is None else filas
+        self._error_posiciones = error_posiciones
+        self._sin_listado = sin_listado
+        self._modifica_respuesta = (modifica_respuesta if modifica_respuesta is not None
+                                    else {"ok": True})
+        self._modifica_status = modifica_status
+        self._falla = falla
+        self.llamadas: List[Dict[str, Any]] = []
+        self.posiciones_pedidas: List[Optional[int]] = []
+        self.modificaciones: List[Dict[str, Any]] = []
+
+    def execute_market_trade(
+        self, symbol: str, action: str = "BUY", volume: Optional[float] = None,
+        sl_distance: Optional[float] = None, tp_distance: Optional[float] = None,
+        no_tp: bool = False, magic: Optional[int] = None,
+        comment: Optional[str] = None, deviation: Optional[int] = None,
+        score: Optional[float] = None, verdict: Optional[str] = None,
+        invalidate_level: Optional[float] = None,
+        planned_entry: Optional[float] = None,
+        components: Optional[Dict[str, Any]] = None,
+        context: Optional[Dict[str, Any]] = None,
+        timeframe: str = "M15", source: str = "",
+    ) -> tuple:
+        if self._falla is not None:
+            raise self._falla
+        self.llamadas.append({
+            "symbol": symbol, "action": action, "volume": volume,
+            "sl_distance": sl_distance, "no_tp": no_tp, "magic": magic,
+            "comment": comment, "score": score, "verdict": verdict,
+            "planned_entry": planned_entry, "components": components,
+            "context": context, "timeframe": timeframe, "source": source,
+        })
+        return dict(self._respuesta), self._status
+
+    def positions(self, magic: Optional[int] = None
+                  ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+        self.posiciones_pedidas.append(magic)
+        if self._sin_listado:
+            return None, self._error_posiciones
+        return list(self._filas), self._error_posiciones
+
+    def modify_stop(self, ticket: Optional[int], sl: Optional[float] = None,
+                    tp: Optional[float] = None) -> tuple:
+        self.modificaciones.append({"ticket": ticket, "sl": sl, "tp": tp})
+        return dict(self._modifica_respuesta), self._modifica_status
+
+
 class TestCeroOrdenes:
-    """Ni la ruta más obvia lleva a una orden: ausencia de código, no de flags."""
+    """Ni la ruta más obvia lleva a una orden: ausencia de código, no de flags.
+
+    F5 añadió un PUERTO inyectado (`ejecucion`), no un import: el servicio sigue
+    sin conocer `api.services.execution` ni `order_send`, y el único camino a una
+    orden es `execute_market_trade` de ese puerto — que es `ExecutionService`,
+    con sus cuatro puertas delante. La garantía se afirma con AST, no con un
+    `dry_run: true`.
+    """
 
     RUTAS = (
         Path(cta_mod.__file__),
@@ -688,25 +817,361 @@ class TestCeroOrdenes:
             assert "order_send" not in atributos, (
                 "{0} llama order_send".format(ruta.name))
 
-    def test_el_constructor_no_acepta_un_puerto_de_ejecucion(self):
+    def test_el_constructor_acepta_un_puerto_inyectado_no_un_import(self):
         params = inspect.signature(CtaAlertService.__init__).parameters
 
-        assert set(params) == {"self", "market", "store", "perfil", "mapa"}
+        assert set(params) == {"self", "market", "store", "ejecucion",
+                               "perfil", "mapa"}
 
-    def test_no_hay_metodo_de_ejecucion_ni_ruta_auto_execute(self):
-        """El watcher tiene auto-execute (responde 501); aquí ni la pregunta existe."""
+    def test_el_servicio_expone_estado_escanear_y_gestionar_salidas(self):
+        """La superficie pública de F5: evaluar, auditar y mover stops. La orden
+        en sí NO es un método público: sale dentro del escaneo, o no sale."""
         servicio = _servicio()
+
+        publicos = sorted(n for n in dir(servicio) if not n.startswith("_"))
+
+        assert publicos == ["escanear", "estado", "gestionar_salidas"]
+
+    def test_no_hay_ruta_auto_execute(self):
+        """El watcher tiene auto-execute (responde 501); aquí el YAML es el
+        interruptor, y una ruta que encendiera lo que la config apaga sería
+        configuración en el sitio que menos se revisa. El trailing es una ruta
+        de salidas, no de activación."""
         from api.routes.cta import router
 
-        assert not hasattr(servicio, "ejecutar")
-        assert not hasattr(servicio, "_execution")
-        assert [ruta.path for ruta in router.routes] == [
-            "/api/cta/status", "/api/cta/scan"]
+        rutas = [ruta.path for ruta in router.routes]
+        assert rutas == ["/api/cta/status", "/api/cta/scan", "/api/cta/trail"]
+        assert not any("auto" in r for r in rutas)
 
     def test_el_escaneo_publica_auto_ejecute_falso_y_dry_run_verdadero(self):
         _, cuerpo = _escanea(store=StoreFalso())
 
         assert cuerpo["auto_ejecute"] is False
-        assert cuerpo["auto_ejecute_disponible"] is False
+        assert cuerpo["auto_ejecute_disponible"] is True
+        assert cuerpo["auto_ejecutadas"] == 0
         assert cuerpo["dry_run"] is True
-        assert cta_mod.AUTO_EJECUCION_DISPONIBLE is False
+        assert cta_mod.AUTO_EJECUCION_DISPONIBLE is True
+
+
+class TestEjecutando:
+    """F5: la orden sale por el puerto inyectado, y SOLO si el YAML lo pide."""
+
+    PERFIL_ENCENDIDO = dict(PERFIL_CTA, auto_execute=True)
+
+    def test_con_el_yaml_apagado_ni_con_puerto_hay_intentos(self):
+        """Las tres condiciones van juntas: la bandera ausente apaga aunque haya
+        puerto, y la alerta F4 —fila, dry_run, modo— sigue existiendo intacta."""
+        ej = EjecucionFalsa()
+        st = StoreFalso()
+        servicio = _servicio(store=st, ejecucion=ej, perfil=lambda: dict(PERFIL_CTA))
+        cuerpo = servicio.escanear(ahora=_ahora(_velas()))
+
+        assert cuerpo["auto_ejecute"] is False
+        assert cuerpo["auto_ejecutadas"] == 0
+        assert cuerpo["dry_run"] is True
+        assert ej.llamadas == []
+
+        assert len(st.filas) == 1
+        assert st.filas[0]["trade_result"] == {
+            "executed": False, "dry_run": True, "mode": "alert"}
+        assert cuerpo["events"][0]["auto_ejecutado"] is False
+
+    def test_con_el_yaml_encendido_y_puerto_la_orden_sale_con_los_datos_del_cta(self):
+        ej = EjecucionFalsa()
+        st = StoreFalso()
+        servicio = _servicio(store=st, ejecucion=ej,
+                             perfil=lambda: self.PERFIL_ENCENDIDO)
+        cuerpo = servicio.escanear(ahora=_ahora(_velas()))
+
+        assert cuerpo["auto_ejecute"] is True
+        assert cuerpo["dry_run"] is False
+        assert cuerpo["auto_ejecutadas"] == 1
+        assert len(ej.llamadas) == 1
+        # La fila de ESTA orden la escribe ExecutionService, no este servicio.
+        assert st.filas == []
+
+        llamada = ej.llamadas[0]
+        assert llamada["symbol"] == "EURUSD"
+        assert llamada["action"] == "BUY"
+        assert llamada["no_tp"] is True            # sin target: la salida es el trailing
+        assert llamada["volume"] is None           # el sizing lo decide ExecutionService
+        assert llamada["magic"] == 8882027
+        assert llamada["verdict"] == cta_mod.VERDICTO_CTA
+        assert llamada["score"] == 0.0
+        assert llamada["source"] == cta_mod.SOURCE_CTA
+        assert llamada["timeframe"] == "D1"
+        assert llamada["comment"] == "Trinity CTA D1"
+        assert llamada["planned_entry"] == pytest.approx(1.0502)   # fill next-open
+        assert llamada["sl_distance"] == pytest.approx(0.0135, abs=1e-9)
+        assert llamada["components"]["cta"]["direction"] == "long"
+        assert llamada["context"] == {
+            "magic": 8882027, "profile": "cta", "comment": "Trinity CTA D1"}
+
+        evento = cuerpo["events"][0]
+        assert evento["auto_ejecutado"] is True
+        assert evento["ejecucion_status"] == 200
+        assert evento["auditado"] is True          # setup_id de ExecutionService
+        assert cuerpo["results"][0]["ejecutado"] is True
+
+    def test_el_rechazo_de_un_gate_no_se_reintenta_en_la_misma_barra(self):
+        """La dedup se marca ANTES del intento (docstring del módulo): un gate que
+        rechaza deja la señal vista, y no se pelea con el mismo rechazo hasta que
+        cambie la barra de señal."""
+        ej = EjecucionFalsa(
+            respuesta={"error": "Operación bloqueada por los topes del día: tope",
+                       "status": "BLOCKED_BY_RISK"}, status=403)
+        servicio = _servicio(ejecucion=ej, perfil=lambda: self.PERFIL_ENCENDIDO)
+        reloj = _ahora(_velas())
+
+        primero = servicio.escanear(ahora=reloj)
+        segundo = servicio.escanear(ahora=reloj)
+
+        evento = primero["events"][0]
+        assert evento["auto_ejecutado"] is False
+        assert evento["ejecucion_status"] == 403
+        assert evento["auditado"] is False        # gate antes de auditar: ni fila
+        assert "topes" in (evento["ejecucion_motivo"] or "")
+        assert len(ej.llamadas) == 1
+
+        assert segundo["dedup"] == 1
+        assert segundo["events"] == []
+        assert len(ej.llamadas) == 1
+
+    def test_el_yaml_lo_pide_sin_puerto_la_alerta_no_se_pierde_y_lo_dice(self):
+        st = StoreFalso()
+        servicio = _servicio(store=st, perfil=lambda: self.PERFIL_ENCENDIDO)
+        cuerpo = servicio.escanear(ahora=_ahora(_velas()))
+
+        assert cuerpo["auto_ejecute"] is False
+        assert cuerpo["dry_run"] is True
+        assert len(st.filas) == 1               # la alerta F4 sigue existiendo
+        evento = cuerpo["events"][0]
+        assert evento["auto_ejecutado"] is False
+        assert evento["ejecucion_motivo"] == cta_mod.MOTIVO_SIN_PUERTO_DE_EJECUCION
+
+    def test_un_puerto_que_revienta_no_tumba_el_scan(self):
+        ej = EjecucionFalsa(falla=RuntimeError("cable suelto"))
+        servicio = _servicio(ejecucion=ej, perfil=lambda: self.PERFIL_ENCENDIDO)
+        cuerpo = servicio.escanear(ahora=_ahora(_velas()))
+
+        assert cuerpo["errors"] == []
+        assert cuerpo["results"][0]["status"] == "alerta"
+        assert cuerpo["results"][0]["ejecutado"] is False
+        assert cuerpo["events"][0]["ejecucion_motivo"] == "cable suelto"
+
+    def test_el_puerto_real_con_riesgo_bloqueado_no_se_salta_la_puerta(self):
+        """La garantía de F5 es de COMPOSICIÓN: el servicio solo conoce el puerto,
+        y el puerto (un `ExecutionService` real) corre sus cuatro puertas."""
+        from api.services.execution import ExecutionService
+
+        st = StoreFalso()
+        real = ExecutionService(
+            market=MarketFalso(riesgo={"blocked": True, "reasons": ["tope del día"]}),
+            store=st)
+        servicio = _servicio(store=st, ejecucion=real,
+                             perfil=lambda: self.PERFIL_ENCENDIDO)
+        cuerpo = servicio.escanear(ahora=_ahora(_velas()))
+
+        evento = cuerpo["events"][0]
+        assert evento["auto_ejecutado"] is False
+        assert evento["ejecucion_status"] == 403
+        assert evento["auditado"] is False
+        assert "topes" in (evento["ejecucion_motivo"] or "")
+        assert st.filas == []
+
+
+class TestGestionarSalidas:
+    """F5: el trailing D1 mueve stops con la política convalidada — o no mueve.
+
+    Con las velas sintéticas (29 cerradas, sin formante en la partición),
+    `atr[28]` = 0.0045 (long) / 0.0065 (short) y `ref` = extremo de la última
+    cerrada (high 1.05 / low 0.95), `mult` 3 → candidato = ref ∓ 3·ATR. El
+    ratchet nunca afloja, así que `sin_cambio` no llama al bróker.
+    """
+
+    def _sirve(self, filas: List[Dict[str, Any]], **kwargs) -> tuple:
+        ej = EjecucionFalsa(filas=filas)
+        servicio = _servicio(ejecucion=ej, **kwargs)
+        return servicio, ej
+
+    def _gestiona(self, servicio, direccion: str = "long") -> Dict[str, Any]:
+        """Pasa con el reloj clavado en la serie sintética.
+
+        Sin `ahora`, `datetime.now()` (lejos en el futuro) daría por cerrada la
+        vela formante y `ref` pasaría a ser su extremo. Con 12 h desde la última,
+        la partición deja 29 cerradas, como describe el docstring de la clase.
+        """
+        return servicio.gestionar_salidas(
+            ahora=_ahora(_velas(direccion=direccion)))
+
+    def test_no_hay_puerto_lo_dice_y_no_revienta(self):
+        cuerpo = _servicio().gestionar_salidas()
+
+        assert cuerpo["error"] is not None
+        assert "no hay puerto de ejecución cableado" in cuerpo["error"]
+        assert cuerpo["positions"] == 0
+        assert cuerpo["results"] == []
+
+    def test_un_perfil_deshabilitado_no_toca_el_bróker(self):
+        ej = EjecucionFalsa(filas=[{"ticket": 1, "symbol": "EURUSD",
+                                    "type": "BUY", "sl": 1.03}])
+        cuerpo = _servicio(
+            ejecucion=ej, perfil=lambda: dict(PERFIL_CTA, enabled=False)
+        ).gestionar_salidas()
+
+        assert cuerpo["enabled"] is False
+        assert cuerpo["motivo"] == "perfil.enabled es false"
+        assert cuerpo["error"] is None
+        assert ej.posiciones_pedidas == []
+        assert ej.modificaciones == []
+
+    def test_sin_posiciones_es_correcto_y_vacio(self):
+        """`([], None)` del puerto no es un error: es el caso normal de un pase."""
+        servicio, ej = self._sirve([])
+        cuerpo = servicio.gestionar_salidas()
+
+        assert cuerpo["positions"] == 0
+        assert cuerpo["results"] == []
+        assert cuerpo["modificados"] == 0
+        assert cuerpo["errores"] == 0
+        assert cuerpo["error"] is None
+        # El puerto se consulta filtrando por el magic del CTA.
+        assert ej.posiciones_pedidas == [8882027]
+
+    def test_un_trailing_que_mejora_modifica_el_stop(self):
+        st = StoreFalso()
+        servicio, ej = self._sirve(
+            [{"ticket": 7, "symbol": "EURUSD", "type": "BUY", "sl": 1.03}],
+            store=st)
+        cuerpo = self._gestiona(servicio)
+
+        assert cuerpo["enabled"] is True
+        assert cuerpo["exit_policy"] == "chandelier"   # core/exit_policy.policy_for("cta")
+        assert cuerpo["positions"] == 1
+        assert cuerpo["modificados"] == 1
+        assert cuerpo["sin_cambio"] == 0
+        assert cuerpo["errores"] == 0
+        r = cuerpo["results"][0]
+        assert r["status"] == "modificado"
+        assert r["ticket"] == 7
+        assert r["symbol"] == "EURUSD"
+        assert r["sl"] == pytest.approx(1.03)
+        # 1.05 (high de la última cerrada) − 3×0.0045: el formante (high 1.051) NO
+        # decide, igual que en el scan.
+        assert r["sl_nuevo"] == pytest.approx(1.05 - 3 * 0.0045, abs=1e-9)
+        assert ej.modificaciones == [
+            {"ticket": 7, "sl": pytest.approx(1.05 - 3 * 0.0045, abs=1e-9),
+             "tp": None}]
+        # El trailing no escribe filas nuevas ni consulta riesgo/lista blanca.
+        assert st.filas == []
+        assert "riesgo" not in cuerpo
+
+    def test_sin_cambio_no_llama_al_bróker(self):
+        """Sl fresco del chandelier: el candidato no lo mejora y NO se manda nada.
+        Ese es exactamente el ratchet convalidado en F2."""
+        servicio, ej = self._sirve(
+            [{"ticket": 7, "symbol": "EURUSD", "type": "BUY",
+              "sl": 1.0502 - 3 * 0.0045}])
+        cuerpo = self._gestiona(servicio)
+
+        assert cuerpo["sin_cambio"] == 1
+        assert cuerpo["modificados"] == 0
+        assert cuerpo["results"][0]["status"] == "sin_cambio"
+        assert cuerpo["results"][0]["sl"] == pytest.approx(1.0502 - 3 * 0.0045)
+        assert ej.modificaciones == []
+
+    def test_el_short_ratchea_con_el_low(self):
+        velas = _velas(direccion="short")
+        servicio, ej = self._sirve(
+            [{"ticket": 9, "symbol": "EURUSD", "type": "SELL", "sl": 0.975}],
+            market=MarketFalso(velas=velas))
+        cuerpo = self._gestiona(servicio, direccion="short")
+
+        assert cuerpo["modificados"] == 1
+        assert cuerpo["sin_cambio"] == 0
+        # 0.95 (low de la última cerrada) + 3×0.0065.
+        assert cuerpo["results"][0]["sl_nuevo"] == pytest.approx(
+            0.95 + 3 * 0.0065, abs=1e-9)
+        assert ej.modificaciones[0]["ticket"] == 9
+
+    def test_sin_sl_no_inventa_uno(self):
+        """Una posición sin stop no recibe uno inventado aquí: `sin_sl` sin tocar
+        el bróker, y el motivo lo dice."""
+        servicio, ej = self._sirve(
+            [{"ticket": 7, "symbol": "EURUSD", "type": "BUY", "sl": 0}])
+        cuerpo = servicio.gestionar_salidas()
+
+        assert cuerpo["sin_sl"] == 1
+        assert cuerpo["results"][0]["status"] == "sin_sl"
+        assert "no se inventa" in (cuerpo["results"][0]["motivo"] or "")
+        assert ej.modificaciones == []
+
+    def test_una_fila_malformada_no_tumba_el_pase(self):
+        servicio, ej = self._sirve(
+            [{"symbol": "EURUSD", "type": "BUY", "sl": 1.03},
+             {"ticket": 8, "symbol": "EURUSD", "type": "BUY", "sl": 1.03}])
+        cuerpo = servicio.gestionar_salidas()
+
+        assert cuerpo["errores"] == 1
+        assert cuerpo["modificados"] == 1
+        assert cuerpo["results"][0]["status"] == "error"
+        assert "ticket" in cuerpo["results"][0]["motivo"]
+        assert cuerpo["results"][1]["status"] == "modificado"
+
+    def test_un_simbolo_sin_datos_no_tumba_el_pase(self):
+        servicio, ej = self._sirve(
+            [{"ticket": 1, "symbol": "GBPUSD", "type": "BUY", "sl": 1.03},
+             {"ticket": 2, "symbol": "EURUSD", "type": "BUY", "sl": 1.03}],
+            market=MarketFalso(velas=_velas(),
+                               fallo_simbolo={"GBPUSD": RuntimeError("sin datos")}))
+        cuerpo = servicio.gestionar_salidas()
+
+        assert cuerpo["errores"] == 1
+        assert cuerpo["modificados"] == 1
+        assert cuerpo["results"][0]["status"] == "sin_datos"
+        assert "sin datos" in (cuerpo["results"][0]["motivo"] or "")
+        assert cuerpo["results"][1]["status"] == "modificado"
+
+    def test_una_direccion_desconocida_es_error(self):
+        servicio, ej = self._sirve(
+            [{"ticket": 7, "symbol": "EURUSD", "type": "HOLD", "sl": 1.03}])
+        cuerpo = servicio.gestionar_salidas()
+
+        assert cuerpo["errores"] == 1
+        assert cuerpo["results"][0]["status"] == "error"
+        assert "dirección" in cuerpo["results"][0]["motivo"]
+        assert ej.modificaciones == []
+
+    def test_el_broker_que_rechaza_queda_en_la_respuesta(self):
+        ej = EjecucionFalsa(
+            filas=[{"ticket": 7, "symbol": "EURUSD", "type": "BUY", "sl": 1.03}],
+            modifica_respuesta={"error": "rechazada por el bróker",
+                                "status": "rejected"},
+            modifica_status=400)
+        cuerpo = _servicio(ejecucion=ej).gestionar_salidas()
+
+        assert cuerpo["errores"] == 1
+        assert cuerpo["modificados"] == 0
+        r = cuerpo["results"][0]
+        assert r["status"] == "error"
+        assert r["http"] == 400
+        assert r["motivo"] == "rechazada por el bróker"
+        assert r["broker_status"] == "rejected"
+
+    def test_un_puerto_que_no_sabe_listar_lo_dice(self):
+        ej = EjecucionFalsa(sin_listado=True,
+                            error_posiciones="el puerto no lista posiciones")
+        cuerpo = _servicio(ejecucion=ej).gestionar_salidas()
+
+        assert cuerpo["error"] == "el puerto no lista posiciones"
+        assert cuerpo["positions"] == 0
+        assert cuerpo["results"] == []
+
+    def test_pide_el_d1_con_las_barras_del_perfil(self):
+        mkt = MarketFalso()
+        servicio, ej = self._sirve(
+            [{"ticket": 7, "symbol": "EURUSD", "type": "BUY", "sl": 1.03}],
+            market=mkt)
+        servicio.gestionar_salidas()
+
+        assert mkt.pedidos == [("EURUSD", "D1", 120)]

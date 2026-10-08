@@ -158,7 +158,9 @@ class PuertoFalso:
 
     def __init__(self, resultado: Optional[Dict[str, Any]] = None,
                  cierre: Optional[Dict[str, Any]] = None,
-                 riesgo_por_lote: Any = 100.0) -> None:
+                 riesgo_por_lote: Any = 100.0,
+                 modificacion: Optional[Any] = None,
+                 posiciones: Optional[Any] = None) -> None:
         self.resultado = resultado if resultado is not None else {
             "ok": True, "retcode": 10009, "status": "llenada", "fill_price": 1.10012,
             "deal": 555, "order": 666, "filling": mt5_execution.ORDER_FILLING_FOK,
@@ -166,9 +168,15 @@ class PuertoFalso:
         }
         self.cierre = cierre
         self.riesgo_por_lote = riesgo_por_lote
+        #: `modify_position`: dict = se devuelve, Exception = se lanza, None = éxito.
+        self.modificacion = modificacion
+        #: `positions`: lista de filas, Exception = se lanza, None = vacío.
+        self.posiciones = posiciones if posiciones is not None else []
         self.envios: List[Dict[str, Any]] = []
         self.cierres: List[Dict[str, Any]] = []
         self.preguntas_riesgo: List[Any] = []
+        self.modificaciones: List[Dict[str, Any]] = []
+        self.consultas_posiciones = 0
 
     def profit_per_lot(self, simbolo: str, lote: float, entrada: float, sl: float) -> Any:
         self.preguntas_riesgo.append((simbolo, lote, entrada, sl))
@@ -188,6 +196,22 @@ class PuertoFalso:
         if isinstance(self.cierre, Exception):
             raise self.cierre
         return dict(self.cierre)
+
+    def modify_position(self, ticket: int, sl: Optional[float] = None,
+                        tp: Optional[float] = None) -> Dict[str, Any]:
+        self.modificaciones.append({"ticket": ticket, "sl": sl, "tp": tp})
+        if self.modificacion is None:
+            return {"ok": True, "status": "modified", "ticket": ticket,
+                    "sl": sl, "tp": tp, "retcode": 10009, "attempts": []}
+        if isinstance(self.modificacion, Exception):
+            raise self.modificacion
+        return dict(self.modificacion)
+
+    def positions(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        self.consultas_posiciones += 1
+        if isinstance(self.posiciones, Exception):
+            raise self.posiciones
+        return [dict(p) for p in self.posiciones]
 
 
 #: Configuración mínima que deja pasar un setup decente: EURUSD en la lista
@@ -955,7 +979,268 @@ def test_cerrar_sin_puerto_es_503():
 
 
 # ---------------------------------------------------------------------------
-# 10. Utilidades del módulo
+# 10. Sin objetivo: la entrada del CTA Swing D1 (F5)
+# ---------------------------------------------------------------------------
+
+
+def test_no_tp_manda_la_orden_sin_objetivo():
+    """`no_tp=True` → la orden sale sin TP y sin su distancia.
+
+    La salida la decide el trailing (`core/exit_policy.py`) con el ATR del
+    momento: un target fijo congelado sería una salida que la convalidación de F2
+    nunca evaluó.
+    """
+    puerto = PuertoFalso()
+    svc = _servicio(puerto=puerto)
+    cuerpo, status = _ejecuta(svc, no_tp=True, tp_distance=None)
+    assert status == 200, cuerpo
+    assert cuerpo["tp"] is None
+    assert cuerpo["risk"]["tp_distance"] is None
+    assert puerto.envios[0]["tp"] is None
+    assert svc._store.filas[0]["target"] is None
+    assert svc._store.filas[0]["trade_result"]["planned_tp"] is None
+    # El SL, en cambio, sigue ahí: sin stop no hay trailing que mover.
+    assert cuerpo["sl"] == pytest.approx(SL_BUY)
+    assert puerto.envios[0]["sl"] == pytest.approx(SL_BUY)
+
+
+def test_no_tp_tambien_salta_el_tp_por_defecto_del_ratio():
+    """Sin `tp_distance` el defecto es `sl * tp_ratio_r`; `no_tp` lo pisa.
+
+    Si `no_tp` solo cortara el TP pedido a mano, una llamada que no trae
+    `tp_distance` saldría con un objetivo de 2R que nadie pidió.
+    """
+    puerto = PuertoFalso()
+    svc = _servicio(puerto=puerto)
+    cuerpo, status = svc.execute_market_trade(
+        symbol="EURUSD", action="BUY", volume=0.10, sl_distance=0.00100,
+        no_tp=True, score=72.0, verdict="APROBADO",
+        invalidate_level=INVALIDACION_BUY, planned_entry=ENTRADA_BUY,
+        source="unit")
+    assert status == 200, cuerpo
+    assert cuerpo["tp"] is None
+    assert cuerpo["risk"]["tp_distance"] is None
+    assert puerto.envios[0]["tp"] is None
+
+
+def test_no_tp_con_un_tp_distance_lo_ignora_y_lo_dice():
+    """Mandar `no_tp=True` y `tp_distance` a la vez es una contradicción: se gana `no_tp`, y se avisa."""
+    puerto = PuertoFalso()
+    svc = _servicio(puerto=puerto)
+    cuerpo, status = _ejecuta(svc, no_tp=True)  # el atajo ya trae tp_distance=0.00200
+    assert status == 200, cuerpo
+    assert cuerpo["tp"] is None
+    assert any("no_tp" in w for w in cuerpo["warnings"])
+    assert cuerpo["risk"]["tp_distance"] is None
+
+
+def test_sin_no_tp_el_tp_sigue_siendo_el_ratio_configurado():
+    """La puerta por defecto no cambia: `no_tp` es opt-in, no un reescritura."""
+    puerto = PuertoFalso()
+    svc = _servicio(puerto=puerto)
+    cuerpo, status = _ejecuta(svc)
+    assert status == 200, cuerpo
+    assert cuerpo["tp"] == pytest.approx(TP_BUY)
+    assert puerto.envios[0]["tp"] == pytest.approx(TP_BUY)
+
+
+def test_no_tp_no_es_un_camino_sin_puertas():
+    """`no_tp` omite el cálculo del TP; el resto de puertas siguen iguales.
+
+    Riesgo del día a tope + `no_tp` → sigue bloqueado. La lista blanca y las
+    noticias funcionan igual, y las cubren sus propios tests.
+    """
+    market = MarketFalso(riesgo={"blocked": True, "reasons": ["tope diario"]})
+    puerto = PuertoFalso()
+    svc = _servicio(market=market, puerto=puerto)
+    cuerpo, status = _ejecuta(svc, no_tp=True)
+    assert status == 403
+    assert cuerpo["status"] == "BLOCKED_BY_RISK"
+    assert puerto.envios == []
+
+
+def test_no_tp_sin_target_no_pide_rr():
+    """Sin objetivo no hay R:R que validar — es lo que hace `validate_entry`
+    con `target=None`, no una excepción nueva del CTA.
+
+    El R:R 1.0 que rechazaría la apertura normal pasa aquí porque no hay dos
+    números que comparar: hay SL y ya. El trailing, no un ratio, es quien
+    administrará la salida.
+    """
+    svc = _servicio(puerto=PuertoFalso())
+    cuerpo, status = _ejecuta(svc, no_tp=True, tp_distance=0.00100)
+    assert status == 200, cuerpo
+    assert cuerpo["risk_validation"].get("approved") is True
+
+
+# ---------------------------------------------------------------------------
+# 11. Modificación de stops y posiciones (trailing del CTA, F5)
+# ---------------------------------------------------------------------------
+
+
+def test_modify_stop_llega_al_puerto():
+    puerto = PuertoFalso()
+    svc = _servicio(puerto=puerto)
+    cuerpo, status = svc.modify_stop(12345, sl=1.10100, tp=1.10400)
+    assert status == 200, cuerpo
+    assert cuerpo["ok"] is True
+    assert puerto.modificaciones == [{"ticket": 12345, "sl": 1.10100, "tp": 1.10400}]
+
+
+def test_modificar_no_pasa_por_las_puertas_de_apertura():
+    """Mover el stop NO abre riesgo: lista blanca, topes y noticias no se consultan.
+
+    Las tres responden a "¿puedo ABRIR riesgo?". Mover el stop de una posición
+    ya abierta solo puede empeorarla (el ratchet "nunca afloja" lo impide en el
+    cálculo previo), y bloquear un trailing por una noticia dejaría el stop donde
+    está justo cuando más se necesita.
+    """
+    store = StoreFalso({"symbols_allow": ["XAUUSD"]})  # la posición es de EURUSD
+    market = MarketFalso(riesgo={"blocked": True, "reasons": ["tope diario"]})
+    news = NewsFalso({"block": True, "reason": "NFP en 5 minutos", "fail_open": True})
+    puerto = PuertoFalso()
+    svc = _servicio(market=market, store=store, news=news, puerto=puerto)
+    cuerpo, status = svc.modify_stop(1, sl=1.10100)
+    assert status == 200, cuerpo
+    assert puerto.modificaciones == [{"ticket": 1, "sl": 1.10100, "tp": None}]
+    assert "daily_risk_state" not in market.llamadas
+    assert news.llamadas == 0
+
+
+def test_modificar_no_escribe_fila_de_setup():
+    """El trailing no es un setup nuevo: la fila ya existe desde la apertura."""
+    store = StoreFalso()
+    puerto = PuertoFalso()
+    svc = _servicio(store=store, puerto=puerto)
+    svc.modify_stop(7, sl=1.10100)
+    assert store.filas == []
+    assert store.resultados == []
+
+
+def test_modificar_sin_ticket_es_400_sin_tocar_el_puerto():
+    puerto = PuertoFalso()
+    svc = _servicio(puerto=puerto)
+    cuerpo, status = svc.modify_stop(None, sl=1.10100)
+    assert status == 400
+    assert puerto.modificaciones == []
+
+
+@pytest.mark.parametrize("ticket,sl,tp", [(None, 1.10100, None), (5, None, None)])
+def test_modificar_sin_nada_que_mandar_es_400(ticket, sl, tp):
+    puerto = PuertoFalso()
+    svc = _servicio(puerto=puerto)
+    _, status = svc.modify_stop(ticket, sl=sl, tp=tp)
+    assert status == 400
+    assert puerto.modificaciones == []
+
+
+def test_modificar_sin_puerto_es_503():
+    svc = _servicio(puerto=None)
+    cuerpo, status = svc.modify_stop(1, sl=1.10100)
+    assert status == 503
+    assert cuerpo["status"] == "NO_EXECUTION_PORT"
+
+
+def test_modificar_con_un_puerto_que_no_sabe_es_503():
+    """Un puerto sin `modify_position` es una instalación que no opera trailing."""
+    svc = _servicio(puerto=object())
+    cuerpo, status = svc.modify_stop(1, sl=1.10100)
+    assert status == 503
+    assert cuerpo["status"] == "NO_EXECUTION_PORT"
+
+
+def test_modificar_que_revienta_en_el_puerto_es_503_no_500():
+    """Un error de puente (no del bróker) se reporta y no tumba la ruta."""
+    puerto = PuertoFalso(modificacion=RuntimeError("puente caído"))
+    svc = _servicio(puerto=puerto)
+    cuerpo, status = svc.modify_stop(1, sl=1.10100)
+    assert status == 503
+    assert cuerpo["status"] == "MODIFY_FAILED"
+    assert "puente caído" in cuerpo["error"]
+
+
+@pytest.mark.parametrize("estado,esperado", [
+    ("no_position", 404),
+    ("symbol_not_found", 404),
+    ("sin_terminal", 503),
+    ("sin_respuesta", 503),
+    ("rejected", 400),
+    ("", 400),
+    (None, 400),
+])
+def test_modificar_traduce_los_estados_del_broker(estado, esperado):
+    puerto = PuertoFalso(modificacion={"ok": False, "status": estado,
+                                       "error": "motivo", "retcode": 10016})
+    svc = _servicio(puerto=puerto)
+    cuerpo, status = svc.modify_stop(9, sl=1.10100)
+    assert status == esperado
+    assert cuerpo["status"] == (estado or "rejected")
+
+
+def test_positions_sin_puerto_es_un_error_distinto():
+    """Sin puerto el error NOMBRA el puerto: es la instalación, no el bróker."""
+    svc = _servicio(puerto=None)
+    filas, error = svc.positions(magic=8882027)
+    assert filas is None
+    assert error and "cableado" in error
+
+
+def test_positions_vacio_no_es_error():
+    """([], None) = "no hay nada que mover", que es lo normal un trail."""
+    svc = _servicio(puerto=PuertoFalso(posiciones=[]))
+    filas, error = svc.positions(magic=8882027)
+    assert filas == []
+    assert error is None
+
+
+def test_positions_filtra_por_magic():
+    """El magic es el que distingue "posiciones del CTA" de las del resto."""
+    puerto = PuertoFalso(posiciones=[
+        {"ticket": 1, "magic": 8882027, "symbol": "EURUSD"},
+        {"ticket": 2, "magic": 8882026, "symbol": "EURUSD"},
+        {"ticket": 3, "magic": 0, "symbol": "XAUUSD"},
+    ])
+    svc = _servicio(puerto=puerto)
+    filas, error = svc.positions(magic=8882027)
+    assert error is None
+    assert [f["ticket"] for f in filas] == [1]
+
+
+def test_positions_sin_filtro_devuelve_todo():
+    puerto = PuertoFalso(posiciones=[{"ticket": 1, "magic": 8882027},
+                                     {"ticket": 2, "magic": 8882026}])
+    svc = _servicio(puerto=puerto)
+    filas, error = svc.positions(magic=None)
+    assert error is None
+    assert len(filas) == 2
+    assert puerto.consultas_posiciones == 1
+
+
+def test_positions_sin_coincidencias_es_vacio_no_error():
+    puerto = PuertoFalso(posiciones=[{"ticket": 2, "magic": 8882026}])
+    svc = _servicio(puerto=puerto)
+    filas, error = svc.positions(magic=8882027)
+    assert filas == []
+    assert error is None
+
+
+def test_positions_con_un_puerto_que_no_sabe_es_error():
+    svc = _servicio(puerto=object())
+    filas, error = svc.positions(magic=8882027)
+    assert filas is None
+    assert error and "positions" in error
+
+
+def test_positions_que_revienta_es_error_no_excepcion():
+    puerto = PuertoFalso(posiciones=RuntimeError("terminal muerta"))
+    svc = _servicio(puerto=puerto)
+    filas, error = svc.positions(magic=8882027)
+    assert filas is None
+    assert error and "terminal muerta" in error
+
+
+# ---------------------------------------------------------------------------
+# 12. Utilidades del módulo
 # ---------------------------------------------------------------------------
 
 

@@ -276,6 +276,7 @@ class ExecutionService:
                              volume: Optional[float] = None,
                              sl_distance: Optional[float] = None,
                              tp_distance: Optional[float] = None,
+                             no_tp: bool = False,
                              magic: Optional[int] = None, comment: Optional[str] = None,
                              deviation: Optional[int] = None,
                              score: Optional[float] = None,
@@ -292,6 +293,13 @@ class ExecutionService:
         tengan EXACTAMENTE las mismas puertas. Si cada ruta.Validara por su cuenta,
         el auto-arranque acabaría siendo el camino con menos filtros, que es como
         se pierde dinero sin que nadie lo decida.
+
+        `no_tp=True` manda la orden SIN objetivo (`tp=None`): es la entrada del
+        CTA Swing D1 (F5), cuya salida la decide el trailing chandelier
+        (`core/exit_policy.py`) y no un target congelado que la convalidación de
+        F2 nunca evaluó. Con `no_tp` se salta solo el cálculo del TP: el R:R de
+        `validate_entry` ni se plantea sin target, y el resto de puertas
+        (lista blanca, riesgo del día, noticias, calidad) siguen iguales.
         """
         simbolo = str(symbol or "").strip().upper()
         acc = str(action or "").strip().upper()
@@ -366,14 +374,22 @@ class ExecutionService:
         else:
             origen_sl = "request"
         sl_distance = float(sl_distance)
-        if tp_distance is None:
-            tp_distance = sl_distance * float(cfg.get("tp_ratio_r", 2.0))
-        tp_distance = float(tp_distance)
 
         # Niveles a partir del precio REAL de entrada, no de un precio guardado.
         signo = 1.0 if acc == "BUY" else -1.0
         sl = entrada - signo * sl_distance
-        tp = entrada + signo * tp_distance
+        if no_tp:
+            if tp_distance is not None:
+                avisos.append("no_tp=True: se ignora tp_distance y la orden sale "
+                              "sin objetivo (la salida la decide la política de "
+                              "salida de la estrategia).")
+            tp_distance = None
+            tp = None
+        else:
+            if tp_distance is None:
+                tp_distance = sl_distance * float(cfg.get("tp_ratio_r", 2.0))
+            tp_distance = float(tp_distance)
+            tp = entrada + signo * tp_distance
 
         # -- 5c. Lote -----------------------------------------------------------
         eff = risk_engine.effective_risk_pct(score, verdict, cfg)
@@ -616,6 +632,92 @@ class ExecutionService:
                 "ticket": resultado.get("ticket"), "symbol": resultado.get("symbol"),
                 "retcode": resultado.get("retcode"), "filling": resultado.get("filling"),
                 "attempts": resultado.get("attempts") or []}, 400
+
+    # -- modificación de stops ---------------------------------------------------
+
+    def modify_stop(self, ticket: Optional[int], sl: Optional[float] = None,
+                    tp: Optional[float] = None) -> Tuple[Dict[str, Any], int]:
+        """`(cuerpo, status)` moviendo el stop (y/o el TP) de una posición ABierta.
+
+        **No pasa por las puertas de apertura, y no es un hueco.** La lista
+        blanca, el riesgo del día y las noticias responden a la pregunta "¿puedo
+        ABRIR riesgo?"; mover el stop de una posición que ya existe no abre nada:
+        el riesgo de esa posición ya está comprometido y mover su stop hacia
+        atrás solo puede EMPEORARLO — que es exactamente lo que la política de
+        salida (`core/exit_policy.py`) impide en el cálculo previo. Bloquear un
+        trailing por una noticia de alto impacto sería dejar el stop donde está
+        justo cuando más se necesita. Las garantías son, por tanto, DOS y están
+        antes de esta llamada: el ratchet "nunca afloja" del cálculo, y aquí el
+        ticket y los niveles tal cual llegan.
+
+        Un `sl=None` (o `tp=None`) significa "no tocar ese nivel": el bróker
+        conserva el que ya tiene. Quien quita un nivel pasa `0.0`, que es la
+        forma en que MT5 lo entiende.
+        """
+        if not ticket:
+            return {"error": "Falta el ticket de la posición a modificar."}, 400
+        if sl is None and tp is None:
+            return {"error": "No hay nada que modificar: pasa sl y/o tp "
+                             "(None deja el nivel como está)."}, 400
+        if self._execution is None:
+            return {"error": "No hay puerto de ejecución cableado: esta instalación "
+                             "puede analizar pero no operar.",
+                    "status": "NO_EXECUTION_PORT"}, 503
+
+        fn = getattr(self._execution, "modify_position", None)
+        if not callable(fn):
+            return {"error": "El puerto de ejecución no sabe modificar posiciones "
+                             "(no implementa modify_position).",
+                    "status": "NO_EXECUTION_PORT"}, 503
+        try:
+            resultado = fn(int(ticket), sl=sl, tp=tp)
+        except Exception as exc:  # noqa: BLE001 - un error de puente se reporta, no se propaga
+            return {"error": "No se pudo modificar la posición {0}: {1}".format(ticket, exc),
+                    "status": "MODIFY_FAILED", "ticket": int(ticket)}, 503
+
+        if resultado.get("ok"):
+            return {"ok": True, **resultado}, 200
+
+        estado = str(resultado.get("status") or "rejected")
+        status_http = {"no_position": 404, "symbol_not_found": 404,
+                       "sin_terminal": 503, "sin_respuesta": 503}.get(estado, 400)
+        cuerpo = {"error": resultado.get("error")
+                  or "El bróker no aceptó la modificación.", "status": estado,
+                  "ticket": resultado.get("ticket", int(ticket)),
+                  "symbol": resultado.get("symbol"),
+                  "retcode": resultado.get("retcode"),
+                  "attempts": resultado.get("attempts") or []}
+        return cuerpo, status_http
+
+    # -- posiciones --------------------------------------------------------------
+
+    def positions(self, magic: Optional[int] = None
+                  ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+        """`(filas, error)`: posiciones abiertas, filtradas por `magic` si se pasa.
+
+        `([], None)` es "no hay posiciones (o ninguna de este magic)", que NO es
+        un error: es el caso normal de un trailing sin nada que mover. El error,
+        cuando existe, distingue las dos formas de no poder contestar —sin puerto
+        cableado (la instalación analiza pero no opera) y un puerto que no sabe
+        listar posiciones—, porque el que llama decide diferente según cuál sea.
+        """
+        if self._execution is None:
+            return None, ("No hay puerto de ejecución cableado: esta instalación "
+                          "puede analizar pero no operar.")
+        fn = getattr(self._execution, "positions", None)
+        if not callable(fn):
+            return None, "El puerto de ejecución no sabe listar posiciones (no implementa positions())."
+        try:
+            filas = fn()
+        except Exception as exc:  # noqa: BLE001 - el motivo viaja en `error`, no revienta
+            return None, "No se pudieron leer las posiciones abiertas: {0}".format(exc)
+        if not isinstance(filas, (list, tuple)):
+            return None, "El puerto de ejecución devolvió las posiciones en un formato desconocido."
+        salidas = [dict(f) for f in filas]
+        if magic is not None:
+            objetivo = int(magic)
+            salidas = [f for f in salidas if int(f.get("magic") or 0) == objetivo]
+        return salidas, None
 
 
 def _status_de_ejecucion(estado: Optional[str]) -> int:

@@ -31,11 +31,12 @@ execution:
   tp_ratio_r: 2.0
   deviation_points: 15
   news_buffer_min: 15
-  # Solo EURUSD ejecuta. DAX sigue en watcher.symbols: se escanea, se loguean sus
-  # setups (incluidas las intenciones dry-run en auto_execute=false) y se auditan,
-  # pero execute_market_trade rechaza cualquier orden que no sea EURUSD. La
-  # restriction no toca el escaneo (watcher.itera watcher.symbols), solo la orden.
-  symbols_allow: ["EURUSD"]
+  # EURUSD y los símbolos del CTA (D-078) ejecutan. Los demás siguen en
+  # watcher.symbols: se escanean, se loguean sus setups (incluidas las intenciones
+  # dry-run en auto_execute=false) y se auditan, pero execute_market_trade rechaza
+  # cualquier orden que no esté en esta lista. La restriction no toca el escaneo
+  # (watcher.itera watcher.symbols), solo la orden.
+  symbols_allow: ["EURUSD", "XAUUSD", "US500", "GBPUSD", "AUDUSD"]
 score:
   min_score: 59.5
   min_rr: 2.0

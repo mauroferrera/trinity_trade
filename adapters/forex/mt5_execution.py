@@ -48,6 +48,9 @@ from adapters.forex.mt5_forex import Session, get_session
 ORDER_TYPE_BUY = 0
 ORDER_TYPE_SELL = 1
 TRADE_ACTION_DEAL = 1
+#: Mover SL/TP de una posición ABierta. Literal, igual que el resto de constantes
+#: de este módulo (ver el bloque de arriba): se prueba sin paquete MT5 instalado.
+TRADE_ACTION_SLTP = 3
 ORDER_TIME_GTC = 0
 
 # OJO, y está verificado contra el bróker real: `ORDER_FILLING_FOK` es **0** y
@@ -702,6 +705,94 @@ class MT5ExecutionAdapter:
             return {"ok": False, "status": "sin_terminal", "symbol": simbolo,
                     "ticket": ticket, "error": str(exc), "attempts": []}
 
+    # -- modificación -----------------------------------------------------------
+
+    def modify_position(self, ticket: int, sl: Optional[float] = None,
+                        tp: Optional[float] = None) -> Dict[str, Any]:
+        """Mueve el SL y/o el TP de una posición ABierta (`TRADE_ACTION_SLTP`).
+
+        `sl=None` o `tp=None` conserva el nivel que YA tiene la posición: el
+        bróker pisa los dos campos con lo que recibe, así que la petición lleva el
+        valor actual en vez de no llevar nada. `0.0` explícito es la forma en que
+        MT5 entiende "sin nivel". El precio se alinea a la rejilla igual que en la
+        apertura, porque un stop off-grid se rechaza con el mismo `10016` opaco.
+
+        No rota rellenos ni pide precio: esta orden no compra ni vende, solo
+        mueve dos campos de una posición que ya existe — por eso `attempts` lleva
+        un solo entry. Y no preserva el magic porque no lo toca: la posición
+        sigue siendo la misma.
+        """
+        try:
+            int_ticket = int(ticket)
+        except (TypeError, ValueError):
+            return {"ok": False, "status": "no_position", "ticket": ticket,
+                    "error": "Ticket inválido: {0!r}".format(ticket), "attempts": []}
+
+        def _get(mt5) -> Dict[str, Any]:
+            posiciones = self._posiciones(mt5, "", int_ticket)
+            if not posiciones:
+                return {"ok": False, "status": "no_position", "ticket": int_ticket,
+                        "error": "No hay posición abierta con ticket {0}.".format(int_ticket),
+                        "attempts": []}
+            fila = _fila(posiciones[0])
+            info = mt5.symbol_info(fila["symbol"])
+            if info is None:
+                return {"ok": False, "status": "symbol_not_found", "symbol": fila["symbol"],
+                        "ticket": fila["ticket"], "error": "El bróker no publica "
+                        "{0}.".format(fila["symbol"]), "attempts": []}
+            trade = self._info_trade(mt5, fila["symbol"])
+            spec = self._spec_de(info, trade, fila["symbol"])
+
+            sl_final = _a_rejilla_precio(sl if sl is not None else fila["sl"],
+                                         spec.tick_size, spec.point, spec.digits)
+            tp_final = _a_rejilla_precio(tp if tp is not None else fila["tp"],
+                                         spec.tick_size, spec.point, spec.digits)
+            request = {
+                "action": TRADE_ACTION_SLTP,
+                "symbol": fila["symbol"],
+                "position": fila["ticket"],
+                "sl": float(sl_final or 0.0),
+                "tp": float(tp_final or 0.0),
+            }
+            result = mt5.order_send(request)
+
+            def _salida(status: str, retcode: Optional[int], comentario: Any,
+                        defecto: Any = None) -> Dict[str, Any]:
+                if status == "modified":
+                    motivo = None
+                elif retcode is None:
+                    motivo = str(comentario or defecto
+                                 or "El bróker no devolvió una respuesta utilizable.")
+                else:
+                    motivo = retcode_msg(retcode, comentario)
+                return {
+                    "ok": status == "modified", "status": status,
+                    "symbol": fila["symbol"], "ticket": fila["ticket"],
+                    "magic": fila["magic"], "sl": request["sl"], "tp": request["tp"],
+                    "retcode": retcode,
+                    "comment": comentario if retcode is not None else None,
+                    "error": motivo,
+                    "attempts": [{"retcode": retcode,
+                                  "ok": status == "modified", "error": motivo}],
+                }
+
+            if result is None:
+                # Ausencia de respuesta, dicha como tal y no como un rechazo: no
+                # hay retcode que traducir y quien llama debe poder reintentar.
+                return _salida("sin_respuesta", None, None,
+                               "order_send devolvió None (revisa la conexión "
+                               "con la terminal).")
+            retcode = int(getattr(result, "retcode", 0) or 0)
+            ok = retcode in RETCODE_OK
+            return _salida("modified" if ok else "rejected", retcode,
+                           getattr(result, "comment", None))
+
+        try:
+            return self._session.call(_get)
+        except TerminalUnavailable as exc:
+            return {"ok": False, "status": "sin_terminal", "ticket": int_ticket,
+                    "error": str(exc), "attempts": []}
+
     def positions(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         """Posiciones abiertas, normalizadas. Vacío si el bróker no publica."""
         simbolo = str(symbol or "").strip().upper() if symbol else None
@@ -738,6 +829,7 @@ __all__ = [
     "POSITION_TYPE_SELL",
     "RETCODE_OK",
     "TRADE_ACTION_DEAL",
+    "TRADE_ACTION_SLTP",
     "adapter",
     "fillings_for",
     "retcode_msg",

@@ -1365,3 +1365,56 @@ Registro: ROADMAP/CHECKLIST/PROJECT_STATE. **Implementado 2026-10-07**: ficheros
 `api/runtime.py`/`api/app.py`/`api/routes/__init__.py`. Tests **+66** (37 servicio,
 21 source, 7 integration) → suite `1621 passed, 2 xfailed` (antes: 1555). Cero órdenes
 verificado por AST y por `auto-execute → 404`.
+
+### D-078 - F5: el CTA Swing D1 se ejecuta por `ExecutionService` con trailing D1 (`core/exit_policy.py`); no hay ruta de "auto-ejecutar"
+
+F4 desplegó el CTA en alerta (D-077); F5 le da su camino de ejecución y su salida.
+El motor de salida —ratchet chandelier "nunca afloja"— se convalidó en F2 y vivía en
+`research/cta.py`; ahora tiene hogar en `core/exit_policy.py` (mismo algoritmo, pureza
+`cta_exit`+políticas) para que **ejecución** lo consuma sin romper la regla "research/ no
+se consume en ejecución" (D-077). `research/cta.py` sigue siendo del camino de alerta
+(evaluar/auditar). Cuatro forks decididos por el operador:
+
+1. **Solo el CTA se auto-ejecuta.** `auto_execute` vive en `config/strategy_cta.yaml`
+   (default `false`). `estado().auto_execute` es el interruptor EFECTIVO = YAML && perfil
+   habilitado && puerto inyectado, y `auto_execute_motivo` dice cuál de los tres falta.
+   El watcher M15 sigue en alerta (Copilot manual siempre abierto); la vía de
+   auto-ejecución es solo del CTA. Guarded: la orden sale por `execution_from(self)` —
+   un `ExecutionService` con las MISMAS puertas que el watcher (lista blanca, riesgo del
+   día, noticias, `validate_entry`, `execution_quality`) — y el CTA **no importa**
+   `api.services.execution` (puerto inyectado, comprobado por AST).
+2. **Rutas POST sin bucle**: `POST /api/cta/scan` (evalúa y audita; manda la orden si el
+   YAML la pide) y **`POST /api/cta/trail`** (pase de trailing sobre las posiciones del
+   magic CTA). Sin bucle de operador: el operador dispara ambos. `/api/cta/status` sigue
+   de lectura y publica el interruptor efectivo. No hay ruta de "auto-ejecutar" (la del
+   watcher responde 501 porque su interruptor es HTTP; aquí el interruptor ES la config).
+3. **Risk reducido 0.25 %**: `CTA_BREAKOUT` no es `ALTA_PROBABILIDAD` → el tamaño de la
+   orden sale con `reduced_risk_pct` (igual que el watcher); el vol-target del sizing lo
+   aporta `ExecutionService`.
+4. **`symbols_allow` se amplía a los símbolos del CTA** (`config/strategy.yaml`):
+   `EURUSD, XAUUSD, US500, GBPUSD, AUDUSD` — la lista blanca pasa a cubrir ambas
+   estrategias; el resto (p. ej. DAX) sigue escaneándose y auditable pero sin orden.
+
+Detalle de ejecución: el scan deduce la señal SOLO en la última barra D1 cerrada
+(misma regla que F4), guarda la dedup por (símbolo, barra) ANTES de intentar cualquier
+orden (un rechazo de gate no se persigue en cada ciclo de un D1), y llama
+`execute_market_trade(symbol, action, sl_distance=abs(entry-sl), no_tp=True,
+planned_entry=entry, components=breakdown, magic/context/comment del perfil, timeframe D1,
+source=SOURCE_CTA)` — `no_tp=True`: sin objetivo congelado, la salida es el trailing D1.
+Con YAML pedido pero sin puerto, el evento lleva `ejecucion_motivo` y sigue la alerta F4.
+`gestionar_salidas()`: posiciones por magic, barra cerrada como `ref` (high BUY / low SELL,
+convención exacta del backtest), `exit_policy.trailing_stop`; sin candidato → `sin_cambio`
+(sin llamada al bróker); con candidato → `modify_stop(ticket, sl)`. Sin SL no se inventa
+uno (`sin_sl`); el trailing no pasa por gates de apertura (no abre riesgo) ni escribe fila
+nueva (la fila existe desde la apertura). Nunca lanza: los fallos salen en el cuerpo.
+Registro: ROADMAP/CHECKLIST/PROJECT_STATE. **Implementado 2026-10-07**: `core/exit_policy.py`
+(+`purity exit_policy`), `api/services/execution.py` (`no_tp`, `modify_stop`, `positions`),
+`adapters/forex/mt5_execution.py` (`modify_position`), `api/services/cta_alert_service.py`
+(activa `auto_execute`, `gestionar_salidas`, `_trail_de_posicion`; quita
+`AUTO_EJECUCION_DISPONIBLE=False` → `True`), `api/routes/cta.py` (+`POST /api/cta/trail`),
+`api/runtime.py` (`cta_service()` inyecta `ejecucion=execution_from(self)`),
+`config/strategy_cta.yaml` (+`auto_execute: false`), `config/strategy.yaml`
+(+3 símbolos en `symbols_allow`). Tests: `test_exit_policy.py` nuevo (61),
+`test_execution_service.py` 58→87, `test_mt5_execution.py` 29→40,
+`test_cta_alert_service.py` reescrito 37→60, `TestRutasCta` 7→8 → suite **`1750 passed,
+2 xfailed`** (+129, antes 1621).

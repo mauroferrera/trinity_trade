@@ -1,17 +1,19 @@
-"""El CTA Swing D1 por HTTP: su perfil, su estado y un escaneo. No manda órdenes.
+"""El CTA Swing D1 por HTTP: perfil, estado, escaneo y trailing de salidas.
 
-Dos rutas, espejo de las del watcher (D-077):
+Tres rutas: la primera de lectura y las otras dos de escritura (D-077, D-078):
 
 - `GET  /api/cta/status`: perfil, símbolos, motor y alertas ya emitidas. Lectura.
-- `POST /api/cta/scan`: un ciclo de evaluación y auditoría en D1. **No manda órdenes.**
+- `POST /api/cta/scan`: un ciclo de evaluación en D1. Audita en `setup_log` y,
+  **solo si el YAML lo pide y hay puerto**, manda la orden por `ExecutionService`.
+- `POST /api/cta/trail`: mueve los stops de las posiciones CTA con la política D1
+  convalidada (`core/exit_policy.py`). Sin puerto dice por qué, sin revientar.
 
-Por qué no hay ruta de auto-ejecución aquí
-------------------------------------------
-El watcher tiene `/api/watcher/auto-execute` para que el interruptor de REF encuentre
-una respuesta honesta (`501`) en vez de un `404`. Este servicio no tiene interruptor:
-nació en F4 sin camino de ejecución (D-077) y F5 decidirá cómo se activa la ejecución
-multi-estrategia —por `ExecutionService`, con sus puertas—. Una ruta que simule un
-interruptor para un sistema que aún no existe sería una pregunta sin respuesta.
+El escaneo cumple cero órdenes mientras `strategy_cta.yaml` no tenga
+`auto_execute: true` (o el perfil esté deshabilitado, o no haya puerto): el
+interruptor compone tres condiciones y `estado()` publica cuál falta. No hay ruta
+de "auto-ejecutar" aquí como la del watcher porque el interruptor es del servicio,
+no de la ruta: `/api/cta/status` ya lo devuelve, y un `POST` que lo cambiara
+sería configuración en el sitio que menos se revisa.
 
 Las rutas son delgadas: sin canales, sin ATR, ni dedup aquí. Eso es
 `api/services/cta_alert_service.py` (orquestación) y `research/cta.py` (aritmética
@@ -48,9 +50,9 @@ def _servicio(rt: Any) -> Any:
 def cta_status(rt: Any = Depends(deps.runtime)) -> Dict[str, Any]:
     """El perfil del CTA, su motor, sus símbolos y las alertas emitidas.
 
-    Incluye `auto_execute`, que sale **siempre a `false`**, con su motivo: es la
-    lectura de un interruptor que controla algo que no existe hoy (las cero órdenes
-    son estructurales, D-077).
+    Incluye `auto_execute` (el interruptor EFECTIVO: YAML && perfil habilitado &&
+    puerto) con `auto_execute_motivo` diciendo cuál falta cuando está apagado:
+    `estado()` es la verdad sobre si este ciclo manda órdenes o solo alerta.
 
     No pide token: es una lectura. Sin base de datos, `enabled` sale a `false` con el
     motivo, que es la verdad sobre un perfil que no se pudo leer.
@@ -69,11 +71,30 @@ def cta_scan(
     y una ruta que permitiera cambiarlo por petición sería configuración en el sitio
     que menos se revisa.
 
-    Escribe en `setup_log`, así que **es una escritura y pide token**. Que no mande
-    órdenes no la vuelve de lectura: quien puede escribir en la auditoría de
-    operaciones es quien puede operar.
+    Escribe en `setup_log` y **puede mandar una orden** (si `auto_execute` está
+    encendido), así que **es una escritura y pide token**. Que hoy mande cero órdenes
+    no la vuelve de lectura: quien puede escribir en la auditoría de operaciones es
+    quien puede operar.
     """
     return _servicio(rt).escanear()
+
+
+@router.post("/api/cta/trail", response_model=None)
+def cta_trail(
+    rt: Any = Depends(deps.runtime),
+    _auth: None = Depends(deps.require_api_token),
+) -> Dict[str, Any]:
+    """Un pase de trailing: mueve los stops de las posiciones CTA con el chandelier.
+
+    No acepta parámetros: el motor es el del perfil (`exit_policy`) y las posiciones
+    se piden filtrando por el magic CTA. Un pase correcto con cero posiciones devuelve
+    `positions: 0` sin error, que es el caso normal de un D1.
+
+    Modifica stops en el bróker, así que **es una escritura y pide token**. Nunca
+    lanza: cualquier fallo (sin puerto, un símbolo sin datos, un broker que rechaza)
+    sale en el cuerpo con su motivo, por si el bucle del operador quiere leerlo.
+    """
+    return _servicio(rt).gestionar_salidas()
 
 
 __all__ = ["router"]

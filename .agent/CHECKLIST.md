@@ -501,7 +501,9 @@ se filtra por métrica.
 
 ### Hito "Arquitectura multi-estrategia" (plan aprobado, D-071)
 
-**Fecha:** 2026-10-06 | **Estado:** plan fijado y documentado; ejecución a partir de la F1.
+**Fecha:** 2026-10-06 | **Estado:** F0→F5 cerradas (6E cerrado, multi-perfil F1, CTA
+convalidado en alerta F4 y ejecutable F5; MR VWAP fuera en F3). Solo queda el mín SCRUM
+de los pasos 5–6 del ROADMAP.
 
 **Qué se decidió** (incorporado del operador, 4 opciones aprobadas)
 - F0 = cierre administrativo de 6E (commit + docs de `research/`), sin deploy a demo. **Rotar la
@@ -568,8 +570,10 @@ superen la convalidación OOS (nada más correcto que el backtest para decidirlo
   descontada ⟹ **gate "OOS supera la fricción" CUMPLIDO**. Referencia Donchian 55: OOS 47
   trades, +150,99 USD/trade. Mayor ganador verificado barra a barra (XAUUSD trailing).
 - Suite completa tras F2: **1537 passed, 2 xfailed** (antes de F2: 1515).
-- Pendiente de F2 (fases F4/F5): ejecutar el CTA requiere perfil propio + `exit_policy.py`
-  + modo alerta `auto_execute=false`; `regime()` es el árbitro hasta entonces.
+- Pendiente de F2 (fases F4/F5): ejecutar el CTA requería perfil propio + `exit_policy.py`
+  + modo alerta `auto_execute=false` → **resuelto**: perfil en F4 (D-077) y
+  `core/exit_policy.py` + `auto_execute` en F5 (D-078). `regime()` sigue siendo el árbitro
+  mientras el MR VWAP no convalide (D-076) y es informativo en el panel.
 
 ### Sub-hito "F3 – Convalidación del Mean Reversion VWAP" (cerrado, D-075/D-076)
 
@@ -632,3 +636,48 @@ no por bandera), `core/` intacto salvo `STRATEGY_CTA_PATH`.
 
 **Siguiente fase:** F5 – ejecución multi-estrategia (`core/exit_policy.py` para trailing
 D1, activación vía `ExecutionService`; el MR VWAP sigue fuera por no convalidar).
+
+### Sub-hito "F5 – Ejecución multi-estrategia del CTA" (cerrado, D-078)
+
+**Fecha:** 2026-10-07 | **Estado:** entregado en verde; el CTA puede ejecutarse por
+`ExecutionService` SOLO si el YAML lo pide (`auto_execute: false` default, fork 1 del
+operador); trailing D1 con el motor convalidado en F2.
+
+- `core/exit_policy.py` (+ `purity exit_policy`): política de salida por perfil y
+  `trailing_stop` (ratchet chandelier "nunca afloja" — `None` sin mejora, sin llamada al
+  bróker). `exit_policy.policy_for("cta") == "chandelier"`. El motor sale de
+  `research/cta.py` a `core/` para que EJECUCIÓN lo consuma sin romper la regla
+  "research/ no se consume en ejecución" (D-077); `research/cta.py` queda SOLO en el
+  camino de alerta.
+- `api/services/execution.py`: `execute_market_trade(no_tp=True)` (sin objetivo: la salida
+  es el trailing D1), `modify_stop(ticket, sl)` (mover un stop NO abre riesgo → sin gates
+  de apertura), `positions(magic)` (filtrar por magic; `([], None)` no es error) +
+  `execution_from(runtime)`.
+- `adapters/forex/mt5_execution.py`: `TRADE_ACTION_SLTP` + `modify_position` (sesión
+  compartida con lectura, D-017).
+- `api/services/cta_alert_service.py`: `auto_execute` EFECTIVO = YAML && perfil habilitado
+  && puerto inyectado (`estado()` publica `auto_execute_conf`/`auto_execute_motivo`);
+  `AUTO_EJECUCION_DISPONIBLE` pasa a `True`; escaneo llama
+  `execute_market_trade(no_tp=True, planned_entry=entry, sl_distance=abs(entry-sl))` con
+  la dedup guardada ANTES del intento (un gate que rechace no se persigue en cada ciclo de
+  un D1); `gestionar_salidas()` + `_trail_de_posicion()`: posiciones por magic, `ref` =
+  extremo de la última barra CERRADA (convención del backtest), `sin_sl` no inventa stop,
+  `sin_cambio` no llama al bróker, nunca lanza. No importa `ExecutionService` (puerto
+  inyectado, AST).
+- `api/routes/cta.py`: docstring 2→3 rutas y **`POST /api/cta/trail`** (token; un pase
+  correcto con 0 posiciones es 200 con `positions: 0`). Sin bucle de operador (fork 2);
+  sin ruta de auto-ejecutar (el interruptor ES la config).
+- `api/runtime.py`: `cta_service()` inyecta `ejecucion=execution_from(self)`; `set_market`
+  lo suelta igual que al watcher.
+- `config/strategy_cta.yaml`: +`auto_execute: false` (fork 1). `config/strategy.yaml`:
+  `symbols_allow` → `[EURUSD, XAUUSD, US500, GBPUSD, AUDUSD]` (fork 4). Riesgo CTA al
+  0.25 % (`reduced_risk_pct`, fork 3) lo aplica `ExecutionService`.
+- Tests (**+129**): `test_exit_policy.py` nuevo (61), `test_execution_service.py` 58→87,
+  `test_mt5_execution.py` 29→40, `test_cta_alert_service.py` reescrito 37→60 (con
+  `EjecucionFalsa`, `TestEjecutando` y `TestGestionarSalidas`), `TestRutasCta` integration
+  7→8 (+trail 401 sin token, +trail lo dice sin reventar).
+- Suite completa tras F5: **1750 passed, 2 xfailed** (antes de F5: 1621).
+- Validación: `py_compile` OK; ruff no instalado en el entorno (suite + `py_compile`).
+
+**Pendientes explícitos:** rotar la clave de Databento (heredado, decide el usuario);
+barajar el mín SCRUM para los pasos 5 y 6 del roadmap multi-estrategia.

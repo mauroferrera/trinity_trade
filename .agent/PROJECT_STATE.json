@@ -765,7 +765,7 @@
       "F2 - Convalidacion CTA en research/: OHLCV D1 de MT5 demo (EURUSD, XAUUSD, US500, GBPUSD, AUDUSD, ~4,7 anios), breakout proximo-open + trailing ATR + vol-targeting en lot_calculator; GATE cumplido (OOS supera la friccion) -> CONVALIDA, Veredicto PASS (D-074)",
       "F3 - Convalidacion Mean Reversion (VWAP) (D-075/D-076): mismo dataset y proceso que F2, motor puro research/mr.py (VWAP 20 + bandas 2*ATR, target=VWAP, max_hold 10) con regime() como interruptor -> NO CONVALIDADO: 0 fills con el gate porque regime() devuelve 'expansion' SIEMPRE (D1 y M15), y sin gate no supera la friccion (OOS 120 trades, PF 0.968, -406 ticks)",
       "F4 - Despliegue en alerta ENTREGADO (D-077): CTA en modo alerta con magic 8882027 y perfil propio strategy_cta.yaml, servicio cta_alert_service.py + rutas GET /api/cta/status y POST /api/cta/scan fuera del ciclo del watcher, cero ordenes reales estructurales (no importa ExecutionService, assertado por AST); core/ intacto salvo STRATEGY_CTA_PATH",
-      "F5 - Ejecucion multi-estrategia: activacion via ExecutionService con plan y exit_policy por perfil (nuevo core/exit_policy.py para trailing D1); Copilot manual siempre abierto"
+      "F5 - Ejecucion multi-estrategia ENTREGADO (D-078): CTA ejecutable via ExecutionService (execution_from en Runtime.cta_service()) con las mismas puertas que el watcher, activado por auto_execute:false (default en strategy_cta.yaml); trailing D1 en core/exit_policy.py (ratchet chandelier; research/ queda SOLO en alerta); nueva ruta POST /api/cta/trail; symbols_allow ampliado a los 5 simbolos CTA; sin ruta auto-execute (el interruptor ES la config)"
     ],
     "datos_cta": "MT5 demo copy_rates (gratis, sufuciente para D1/H4); Databento SOLO para microestructura intradia (M1/M15)"
   },
@@ -956,5 +956,60 @@
       "ruff NO instalado en el entorno; validacion via suite + py_compile"
     ],
     "pendiente_f4": "auto_execute no existe en las rutas CTA (404 a proposito): conectarlo a ExecutionService es F5; MR VWAP sigue fuera (D-076)"
+  },
+  "f5_cta_ejecucion": {
+    "hito": "F5 - Ejecucion multi-estrategia del CTA Swing D1 (ExecutionService + trailing D1 en core/exit_policy.py)",
+    "fecha": "2026-10-07",
+    "estado": "entregado en verde; el CTA puede ejecutarse SOLO si strategy_cta.yaml lo pide (auto_execute:false default); trailing D1 con el motor convalidado en F2",
+    "decisiones": [
+      "D-071 (roadmap)",
+      "D-078 (diseno: activacion por YAML solo-CTA, rutas POST sin bucle, riesgo 0.25%, symbols_allow ampliado; autoriza el trailing en core/ para que ejecucion lo consuma)"
+    ],
+    "forks_operador": [
+      "solo el CTA se auto-ejecuta: auto_execute vive en config/strategy_cta.yaml (default false); watcher M15 sigue en alerta, Copilot manual abierto",
+      "rutas POST sin bucle: POST /api/cta/scan (evalua y manda orden si el YAML la pide) + POST /api/cta/trail (pase de salidas por magic CTA); sin ruta auto-execute (el interruptor ES la config)",
+      "riesgo reducido 0.25%: CTA_BREAKOUT no es ALTA_PROBABILIDAD -> reduced_risk_pct; el vol-target lo aporta ExecutionService",
+      "symbols_allow ampliado a [EURUSD, XAUUSD, US500, GBPUSD, AUDUSD] en config/strategy.yaml"
+    ],
+    "exit_policy": {
+      "archivo": "core/exit_policy.py + purity exit_policy",
+      "motor": "trailing_stop (ratchet chandelier, nunca afloja; None sin mejora -> sin llamada al broker); policy_for('cta') == 'chandelier'",
+      "regla_de_oro": "el motor pasa de research/ a core/ para que la EJECUCION lo consuma; research/cta.py queda SOLO en el camino de alerta (D-077)"
+    },
+    "execution": {
+      "api/services/execution.py": "execute_market_trade(no_tp=True) - sin objetivo congelado, la salida es el trailing D1; modify_stop(ticket, sl) - mover un stop no abre riesgo, sin gates de apertura; positions(magic) - ([], None) no es error; execution_from(runtime)",
+      "adapters/forex/mt5_execution.py": "TRADE_ACTION_SLTP + modify_position (sesion compartida con lectura, D-017)"
+    },
+    "servicio": {
+      "auto_execute_efectivo": "YAML && perfil habilitado && puerto inyectado; estado() publica auto_execute_conf, auto_execute, auto_execute_motivo y AUTO_EJECUCION_DISPONIBLE=True",
+      "dedup_antes": "la dedup por (simbolo, barra) se guarda ANTES del intento de orden: un gate que rechaza no se persigue en cada ciclo de un D1",
+      "llamada": "execute_market_trade(symbol, action, sl_distance=abs(entry-sl), no_tp=True, planned_entry=entry, components=breakdown, magic/context del perfil, timeframe D1, source=SOURCE_CTA)",
+      "gestionar_salidas": "posiciones por magic; ref = extremo de la ULTIMA barra cerrada (high BUY / low SELL, convencion del backtest); sin_cambio no llama al broker; sin_sl no inventa stop; nunca lanza",
+      "sin_import": "el servicio no importa api.services.execution ni MetaTrader5 (puerto inyectado, assertado por AST)"
+    },
+    "rutas": [
+      "GET /api/cta/status (sin token): publica el interruptor efectivo con su motivo",
+      "POST /api/cta/scan (token): audita y manda orden solo si el YAML la pide",
+      "POST /api/cta/trail (token): pase de trailing; 0 posiciones es un pase correcto (positions: 0), 401 sin token, sin broker -> 200 con error 'No hay puerto de ejecucion'"
+    ],
+    "wiring": "Runtime.cta_service() inyecta ejecucion=execution_from(self); set_market suelta el servicio como al watcher",
+    "config": [
+      "config/strategy_cta.yaml +auto_execute: false (fork 1)",
+      "config/strategy.yaml symbols_allow + [XAUUSD, US500, GBPUSD, AUDUSD] (fork 4)"
+    ],
+    "suite": "1750 passed, 2 xfailed (antes de F5: 1621 passed, 2 xfailed; +129)",
+    "tests": [
+      "tests/unit/test_exit_policy.py (61 nuevo)",
+      "tests/unit/test_execution_service.py (58 -> 87: no_tp, modify_stop, positions)",
+      "tests/unit/test_mt5_execution.py (29 -> 40: modify_position)",
+      "tests/unit/test_cta_alert_service.py (37 -> 60 reescrito: EjecucionFalsa, TestEjecutando 7, TestGestionarSalidas 14)",
+      "tests/integration/test_api_routes.py::TestRutasCta (7 -> 8: trail 401 sin token, trail sin broker lo dice sin reventar)"
+    ],
+    "validacion": [
+      "py_compile OK",
+      "core/exit_policy.py nuevo con purity en verde",
+      "ruff NO instalado en el entorno; validacion via suite + py_compile"
+    ],
+    "pendiente_f5": "Deuda de la deuda: rotar clave Databento (usuario). Next en roadmap: minimo SCRUM para los pasos 5-6 (multi-estrategia operativa). El MR VWAP sigue fuera (D-076)"
   }
 }

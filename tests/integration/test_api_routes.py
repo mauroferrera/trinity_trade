@@ -587,6 +587,7 @@ class TestHealth:
             "/api/agent/roles",
             "/api/cta/status",
             "/api/cta/scan",
+            "/api/cta/trail",
         ):
             assert esperada in rutas, "falta la ruta {0}".format(esperada)
 
@@ -1631,14 +1632,23 @@ class TestCtaCompartido:
 
 
 class TestRutasCta:
-    """Las dos rutas del CTA: lectura sin token, escritura con él, cero órdenes."""
+    """Las rutas del CTA: lectura sin token, escrituras con él, cero órdenes.
+
+    La escritura es doble desde F5 (D-078): `/api/cta/scan` audita (y solo manda
+    orden si el YAML la pide), `/api/cta/trail` mueve stops. Ninguna de las dos
+    debe servir sin token.
+    """
 
     def test_status_es_lectura_sin_token_y_con_el_perfil_real(self, cliente):
-        """`/api/cta/status` lee `config/strategy_cta.yaml` DESPLEGADO (F4).
+        """`/api/cta/status` lee `config/strategy_cta.yaml` DESPLEGADO (F4/F5).
 
         Sin token (es lectura) y sin base de datos: el perfil no vive en la BD.
         El magic y el perfil que salen aquí son los del fichero real, no un doble:
         si alguien edita el YAML y rompe la forma, este test lo dice.
+
+        El interruptor sale apagado porque el YAML lo pide (`auto_execute: false`),
+        no porque el mecanismo no exista: `auto_execute_disponible` distingue
+        "apagado" de "no implementado".
         """
         r = cliente.get("/api/cta/status")
 
@@ -1649,8 +1659,10 @@ class TestRutasCta:
         assert estado["magic"] == 8882027
         assert estado["timeframe"] == "D1"
         assert "EURUSD" in estado["symbols"]
+        assert estado["auto_execute_conf"] is False
         assert estado["auto_execute"] is False
-        assert estado["auto_execute_disponible"] is False
+        assert estado["auto_execute_disponible"] is True
+        assert "YAML" in (estado["auto_execute_motivo"] or "")
         assert estado["dry_run"] is True
 
     def test_scan_sin_token_es_401(self, db, monkeypatch):
@@ -1723,13 +1735,47 @@ class TestRutasCta:
         assert db.list_setup_log(limit=50) == []
 
     def test_no_hay_ruta_de_auto_execute(self, cliente):
-        """Ni siquiera la pregunta existe: no hay interruptor que encender (D-077).
+        """Ni siquiera la pregunta existe: el interruptor es del YAML, no de la ruta.
 
         El watcher sí la tiene (responde `501` a propósito) porque su interruptor
-        existe y está apagado. Aquí una ruta que simulara un 501 estaría fingiendo
-        que hay un modo de ejecución que aún no se ha construido (es F5).
+        se cambia por HTTP. Aquí el interruptor vive en `config/strategy_cta.yaml`
+        (D-078) y `estado()` lo publica con su motivo: un `POST` que encendiera lo
+        que la config apaga sería configuración en el sitio que menos se revisa.
         """
         assert cliente.post("/api/cta/auto-execute", json={}).status_code == 404
+
+    def test_trail_sin_token_es_401(self, db, monkeypatch):
+        """`/api/cta/trail` mueve stops en el bróker: no es una lectura."""
+        monkeypatch.setenv("API_TOKEN", "secreto")
+        app = create_app(_runtime(market=FakeMarket(velas=_velas_cta()),
+                                  store=db))
+        with TestClient(app) as c:
+            r = c.post("/api/cta/trail")
+
+        assert r.status_code == 401
+        assert r.json()["detail"] == "token inválido o ausente"
+
+    def test_trail_con_token_y_sin_bróker_lo_dice_sin_reventar(self, db,
+                                                              monkeypatch):
+        """El puerto existe pero la terminal no: `gestionar_salidas` responde 200
+        con el motivo y cero movimientos, no un 500.
+
+        El runtime cablea `ejecucion=execution_from(self)` SIEMPRE; sin adaptador
+        de ejecución el `ExecutionService` degrada con "no hay puerto de ejecución"
+        y el servicio lo traduce en `error` dentro del cuerpo.
+        """
+        monkeypatch.setenv("API_TOKEN", "secreto")
+        app = create_app(_runtime(market=FakeMarket(velas=_velas_cta()),
+                                  store=db))
+        with TestClient(app) as c:
+            cuerpo = c.post("/api/cta/trail",
+                            headers={"X-API-Token": "secreto"}).json()
+
+        assert cuerpo["enabled"] is True
+        assert cuerpo["positions"] == 0
+        assert cuerpo["results"] == []
+        assert cuerpo["error"] is not None
+        assert "No hay puerto de ejecución" in cuerpo["error"]
 
     def test_el_estado_refleja_la_dedup_entre_peticiones(self, db, monkeypatch):
         """La memoria de la alerta es del SERVICIO compartido por la app."""

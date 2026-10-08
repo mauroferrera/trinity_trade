@@ -1,6 +1,6 @@
-# Perfil del CTA Swing D1 (F4, D-077): la estrategia convalidada en F2 (D-073/D-074)
-# con su magic, sus símbolos y su motor. Un fichero aparte de strategy.yaml porque es
-# OTRA estrategia con OTRA cadencia (D1, no M15) y OTRA vida: aquí se decide qué
+# Perfil del CTA Swing D1 (F4, D-077 -> F5, D-078): la estrategia convalidada en F2
+# (D-073/D-074) con su magic, sus símbolos y su motor. Un fichero aparte de strategy.yaml
+# porque es OTRA estrategia con OTRA cadencia (D1, no M15) y OTRA vida: aquí se decide qué
 # evalúa el modo alerta, no qué hace la ejecución.
 #
 # El servicio (api/services/cta_alert_service.py) es el único consumidor. Si el fichero
@@ -9,8 +9,14 @@
 # silencioso aquí encendería una estrategia que nadie configuró).
 #
 # Los parámetros del engine son los clásicos fijados en F2 SIN recalibrar (D-073):
-# ATR 14 (Wilder), Donchian 20, chandelier k=3.0. No hay vol-target aquí: el sizing
-# es de ejecución y llega con F5.
+# ATR 14 (Wilder), Donchian 20, chandelier k=3.0.
+#
+# auto_execute (F5): la OTRA mitad del interruptor del servicio. `estado().auto_execute`
+# solo es `true` si este YAML lo pide, el perfil está habilitado Y `Runtime.cta_service()`
+# cableó un puerto de ejecución (ExecutionService). Con `false` (el estado por defecto de
+# un sistema que aún no se convalidó en vivo) el CTA sigue en modo alerta: evalúa, escribe
+# su fila en setup_log y NO manda órdenes. Encenderlo efectivamente requiere puerto y
+# terminal; el vol-target del sizing lo aporta la ejecución al ejecutar.
 
 enabled: true
 magic: 8882027
@@ -23,6 +29,7 @@ symbols:
   - US500
   - GBPUSD
   - AUDUSD
+auto_execute: false
 engine:
   atr_n: 14
   don_n: 20

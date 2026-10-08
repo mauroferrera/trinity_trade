@@ -243,7 +243,15 @@ suite en verde como criterio de aceptación.
   `ExecutionService` (assertado por AST). `core/` intacto salvo `STRATEGY_CTA_PATH`.
   Tests: 37 servicio + 21 source + 7 integration (66 nuevos). Suite `1621 passed,
   2 xfailed`.
-- [ ] **F5 – Ejecución multi-estrategia**: activación vía `ExecutionService` con plan y `exit_policy`
-  por perfil (nuevo `core/exit_policy.py` para trailing D1); Copilot manual siempre abierto.
+- [x] **F5 – Ejecución multi-estrategia** (D-078): el CTA se ejecuta por
+  `ExecutionService` (`execution_from(self)` en `Runtime.cta_service()`) con las MISMAS
+  puertas que el watcher (lista blanca, riesgo del día, noticias, `validate_entry`,
+  `execution_quality`), activado por `auto_execute: false` (default) en
+  `config/strategy_cta.yaml`. Trailing D1 con la política convalidada en `core/exit_policy.py`
+  (ratchet chandelier "nunca afloja"; `research/cta.py` queda SOLO en el camino de alerta).
+  Nueva ruta `POST /api/cta/trail` (pase de salidas por magic CTA); `/api/cta/scan` manda
+  la orden si el YAML la pide. `symbols_allow` ampliado a los 5 símbolos CTA (fork 4).
+  Tests: exit_policy 61 + execution 58→87 + mt5 29→40 + CTA 37→60 + rutas 7→8.
+  Suite `1750 passed, 2 xfailed`.
 
 **Pendientes explícitos:** rotar la clave de Databento (heredado), decide el usuario.

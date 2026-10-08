@@ -219,6 +219,7 @@ class FakeMT5(types.ModuleType):
         self.ORDER_TYPE_BUY = 0
         self.ORDER_TYPE_SELL = 1
         self.TRADE_ACTION_DEAL = 1
+        self.TRADE_ACTION_SLTP = 3
         self.ORDER_TIME_GTC = 0
         self.ORDER_FILLING_FOK = 0
         self.ORDER_FILLING_IOC = 1

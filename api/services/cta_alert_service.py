@@ -1,28 +1,58 @@
-"""El CTA Swing D1 en MODO ALERTA (F4, D-077): evalúa, audita y NO manda órdenes.
+"""El CTA Swing D1 (F4 alerta, D-077 · F5 ejecución opt-in, D-078): evalúa, audita
+y —solo si el YAML lo pide— ejecuta por `ExecutionService`.
 
 Qué hace
 --------
-Dos operaciones, igual que el watcher: `estado()` y `escanear()`. El escaneo mira los
-símbolos del perfil propio (`config/strategy_cta.yaml`), evalúa el breakout con el
-motor CONVALIDADO en F2 (`research/cta.py`) sobre SOLO las barras D1 cerradas, y si la
-última cerrada rompió el canal, escribe una fila en `setup_log` con el magic 8882027 y
-el perfil `cta`, y `trade_result {executed: false, dry_run: true, mode: "alert"}`.
+Tres operaciones:
 
-Qué NO hace (y por qué es estructural, no una bandera)
--------------------------------------------------------
-No toca `ExecutionService`, no importa `api.services.execution` y no existe ningún
-camino de este servicio hacia `order_send`: las cero órdenes no las garantiza un
-`auto_execute: false`, las garantiza la ausencia de código. Cuando F5 conecte la
-ejecución multi-estrategia, entrará por `ExecutionService.execute_market_trade` con sus
-puertas (lista blanca, riesgo del día, noticias, `validate_entry`), nunca por aquí.
+- `estado()` y `escanear()`, iguales en forma a las del watcher: el escaneo mira los
+  símbolos del perfil propio (`config/strategy_cta.yaml`), evalúa el breakout con el
+  motor CONVALIDADO en F2 (`research/cta.py`) sobre SOLO las barras D1 cerradas, y si
+  la última cerrada rompió el canal, escribe una fila en `setup_log` con el magic
+  8882027 y el perfil `cta`.
+- `gestionar_salidas()`: el trailing chandelier de las posiciones del magic CTA
+  (`core/exit_policy.py`), la otra mitad de F5. Sin esa, el stop inicial que pone la
+  apertura sería el último stop que el sistema pone jamás, y la regla convalidada en
+  F2 (ratchet "nunca afloja" barra a barra) existiría solo en el backtest.
+
+Cómo se activa la ejecución (F5, D-078)
+---------------------------------------
+El interruptor es `auto_execute` en `config/strategy_cta.yaml` y viene **apagado**:
+el CTA entra en vivo solo si alguien lo enciende a sabiendas. Para que la orden salga
+hacen falta TRES cosas a la vez —el perfil habilitado, `auto_execute: true` y un
+puerto de ejecución inyectado en el constructor (`Runtime.cta_service()` monta
+`execution_from(self)`)—, y cualquiera de las tres ausente deja el sistema en alerta
+con el motivo publicado en `estado()`. No hay ruta `/api/cta/auto-execute`: el YAML
+es el interruptor, y una ruta que encendiera lo que la config apaga sería
+configuración en el sitio que menos se revisa.
+
+La orden pasa ENTERA por `ExecutionService.execute_market_trade` con sus puertas
+(lista blanca, riesgo del día, noticias, `validate_entry`, `execution_quality`) y con
+`no_tp=True`: el CTA no tiene target (su salida la decide el trailing), y
+`CTA_BREAKOUT` no es `ALTA_PROBABILIDAD`, así que el sizing sale por
+`reduced_risk_pct`. En ese camino la fila de auditoría la escribe el propio
+`ExecutionService` —con sus gates y su `validated`—, no este servicio; aquí solo se
+cuenta el resultado.
+
+Qué NO cambió (y por qué es estructural, no una bandera)
+--------------------------------------------------------
+Este módulo no importa `api.services.execution` ni `MetaTrader5`, y en ningún punto
+llama `order_send`: no conoce el bróker, conoce el PUERTO inyectado, igual que
+`market` y `store`. Sin puerto inyectado no hay orden posible y el servicio lo dice
+(`auto_execute_motivo`); con puerto, el único camino a una orden es el que ya existía
+con sus cuatro puertas. El trailing va aparte y a propósito: `gestionar_salidas()`
+no consulta lista blanca ni noticias (mover un stop NO abre riesgo: las tres responden
+a "¿puedo abrir?"; un trailing bloqueado por una noticia dejaría el stop viejo justo
+cuando más se necesita), y no escribe fila de `setup_log` (la fila de esa posición
+existe desde su apertura).
 
 Por qué este servicio y no el watcher
 -------------------------------------
 El watcher evalúa en M15 con cadencia de minutos; el CTA decide en D1 con cadencia de
 días. Meterlo en el ciclo del watcher acoplaría dos ritmos que nada comparte (y haría
 que un escaneo M15 reevaluara un breakout D1 sin que la barra cambiara). Son servicios
-hermanos con el mismo contrato —leer, decidir, auditar, no ejecutar— y cadencias
-distintas (D-077, fork 3).
+hermanos con el mismo contrato —leer, decidir, auditar, y (F5) ejecutar solo si el
+YAML lo pide— y cadencias distintas (D-077, fork 3).
 
 La regla de barras cerradas (anti-lookahead)
 --------------------------------------------
@@ -40,7 +70,9 @@ La señal es el breakout de la ÚLTIMA barra cerrada y el fill el open de la bar
 formante (next-open, la misma convención con la que se convalidó en F2). Dedup en
 memoria por (símbolo, tiempo de la barra de señal): un reinicio del proceso reescribe
 la fila, ruido aceptable y documentado; NO se usa `setup_state`, cuyo TTL es de minutos
-y esto es D1.
+y esto es D1. En F5 la dedup se marca ANTES del intento de ejecución: una orden
+rechazada por un gate no se reintenta en cada ciclo de un D1 —la barra de señal no
+cambia, y reintentar sería pelearse con el mismo rechazo hasta el martes.
 """
 
 from __future__ import annotations
@@ -49,21 +81,31 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from core import strategy_map
+from core import exit_policy, strategy_map
 from research import cta
 
 log = logging.getLogger(__name__)
 
-#: ¿Puede este scan mandar una orden? No, y no hay parámetro que lo cambie. Publicarlo
-#: (igual que en el watcher) es lo que permite que un panel muestre el interruptor
-#: apagado y explique POR QUÉ en vez de no mostrar nada.
-AUTO_EJECUCION_DISPONIBLE = False
+#: ¿Puede este scan mandar una orden? Sí — pero solo si el YAML lo pide y hay puerto
+#: de ejecución inyectado (F5, D-078). Publicarlo (igual que en el watcher) es lo que
+#: permite que un panel muestre el interruptor y explique POR QUÉ en vez de no mostrar
+#: nada: la constante dice si el MECANISMO existe, `estado()` dice si ESTÁ ENCENDIDO.
+AUTO_EJECUCION_DISPONIBLE = True
 
+#: Motivo de `auto_execute_motivo` cuando el YAML lo tiene apagado (de fábrica).
 MOTIVO_SIN_AUTO_EJECUCION = (
-    "El CTA en alerta evalúa el breakout D1 y lo audita en setup_log con "
-    "trade_result {executed: false, dry_run: true}. La ejecución multi-estrategia "
-    "llega en F5 por ExecutionService, con sus puertas; no existe hoy ningún "
-    "camino de este servicio a una orden."
+    "auto_execute está apagado en config/strategy_cta.yaml: el CTA entra en vivo "
+    "solo si el YAML lo pide (F5, D-078). Encendido, la orden sale por "
+    "ExecutionService con sus puertas (lista blanca, riesgo del día, noticias, "
+    "validate_entry, execution_quality)."
+)
+
+#: Motivo cuando el YAML lo pide pero nadie inyectó el puerto: el interruptor está
+#: encendido y el que explica la ausencia de órdenes es el cable, no la config.
+MOTIVO_SIN_PUERTO_DE_EJECUCION = (
+    "auto_execute está encendido en config/strategy_cta.yaml pero el servicio no "
+    "tiene puerto de ejecución inyectado (Runtime.cta_service() monta "
+    "execution_from(self)): se queda en alerta."
 )
 
 #: Veredicto de una alerta del CTA. Es el texto con el que se consulta la auditoría,
@@ -108,24 +150,37 @@ def _mapa_de_fabrica() -> Dict[int, str]:
 
 
 class CtaAlertService:
-    """Alerta D1 del CTA Swing D1. Evalúa y audita; nunca ejecuta.
+    """Alerta D1 del CTA Swing D1: evalúa, audita y —con el YAML mandando— ejecuta.
+
+    Tres operaciones: `estado()`, `escanear()` y `gestionar_salidas()` (el trailing
+    D1 de las posiciones propias). La ejecución NO es un cuarto camino: es la misma
+    llamada a `ExecutionService.execute_market_trade` que cualquier otra estrategia,
+    con sus puertas, y solo si `auto_execute` está encendido en el YAML y hay puerto
+    inyectado (ver el docstring del módulo).
 
     Los colaboradores son opcionales e inyectables, igual que en `WatcherService`:
-    un test hace `CtaAlertService(market=Falso(), store=Falso(), perfil=lambda: {...},
-    mapa=lambda: {...})` y ya tiene el servicio entero. Los callables de config
-    existen para que los tests no dependan de `config/` ni de `settings/` (y para que
-    el servicio no crezca un seam en `database/store.py` que nadie más usa).
+    un test hace `CtaAlertService(market=Falso(), store=Falso(), ejecucion=Falso(),
+    perfil=lambda: {...}, mapa=lambda: {...})` y ya tiene el servicio entero. Los
+    callables de config existen para que los tests no dependan de `config/` ni de
+    `settings/` (y para que el servicio no crezca un seam en `database/store.py` que
+    nadie más usa). `ejecucion` es el PUERTO ya construido —una `ExecutionService`—:
+    este módulo no la importa, igual que no importa MT5.
     """
 
     def __init__(
         self,
         market: Any = None,
         store: Any = None,
+        ejecucion: Any = None,
         perfil: Optional[Callable[[], Dict[str, Any]]] = None,
         mapa: Optional[Callable[[], Dict[int, str]]] = None,
     ) -> None:
         self._market = market
         self._store = store
+        #: El PUERTO de ejecución (una `ExecutionService`), inyectado por
+        #: `Runtime.cta_service()`. `None` = esta instalación analiza pero no opera:
+        #: el servicio entero funciona en alerta y `estado()` lo publica con motivo.
+        self._ejecucion = ejecucion
         self._perfil = perfil if perfil is not None else _perfil_de_fabrica
         self._mapa = mapa if mapa is not None else _mapa_de_fabrica
         #: Última barra de señal ya alertada, por símbolo. En memoria y NO en la base
@@ -271,13 +326,25 @@ class CtaAlertService:
     def estado(self) -> Dict[str, Any]:
         """Configuración del perfil y estado vigente. Lectura, sin token.
 
-        `auto_execute` sale SIEMPRE a `False`: es la lectura de un interruptor que
-        controla algo que no existe. `auto_execute_conf` no existe aquí porque no hay
-        ni siquiera una bandera en el YAML: este servicio nació sin camino de
-        ejecución (D-077), y publicar un "lo que el YAML pide" que nadie pidió
-        confundiría más que aclarar.
+        `auto_execute_conf` publica lo que pide el YAML (como en el watcher);
+        `auto_execute` es el interruptor EFECTIVO: `true` solo si el perfil está
+        habilitado, el YAML lo pide y hay puerto inyectado. Cualquiera de las tres
+        ausente deja `auto_execute` a `false` y `auto_execute_motivo` diciendo
+        cuál falta — sin eso, un panel vería "encendido" y no entendería por qué
+        no sale ninguna orden. `dry_run` acompaña al efectivo: es la lectura de
+        "¿este ciclo manda órdenes?".
         """
         habilitado, motivo, perfil = self._config()
+        conf = bool(perfil.get("auto_execute"))
+        efectivo = bool(habilitado and conf and self._ejecucion is not None)
+        if efectivo:
+            motivo_auto = None
+        elif not habilitado:
+            motivo_auto = motivo
+        elif not conf:
+            motivo_auto = MOTIVO_SIN_AUTO_EJECUCION
+        else:
+            motivo_auto = MOTIVO_SIN_PUERTO_DE_EJECUCION
         return {
             "enabled": habilitado,
             "motivo": motivo,
@@ -292,11 +359,14 @@ class CtaAlertService:
             # que hace visible la dedup en memoria sin abrir la base de datos.
             "alerts": {s: datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
                        for s, ts in sorted(self._alertas.items())},
-            "auto_execute": False,
+            "auto_execute_conf": conf,
+            "auto_execute": efectivo,
             "auto_execute_disponible": AUTO_EJECUCION_DISPONIBLE,
-            "auto_execute_motivo": (None if AUTO_EJECUCION_DISPONIBLE
-                                    else MOTIVO_SIN_AUTO_EJECUCION),
-            "dry_run": True,
+            "auto_execute_motivo": motivo_auto,
+            "dry_run": not efectivo,
+            # La política de salida que aplica `gestionar_salidas()`: el mismo
+            # motor convalidado en F2 (`core/exit_policy.py`).
+            "exit_policy": exit_policy.policy_for(PERFIL_ESPERADO),
         }
 
     # -- escaneo -----------------------------------------------------------------
@@ -313,16 +383,23 @@ class CtaAlertService:
         3. Señal SOLO en la última cerrada (`research/cta.py`). Una señal vieja no
            es una alerta nueva: el fill habría sido el open de una barra que ya
            cerró, y perseguirla sería entrar a un precio que ya no existe.
-        4. Dedup por (símbolo, barra de señal) y fila en `setup_log`.
+        4. Dedup por (símbolo, barra de señal), ANTES de cualquier intento.
+        5. Si `auto_execute` es efectivo, la orden sale por
+           `ExecutionService.execute_market_trade` (`no_tp=True`, el trailing es la
+           salida); si no, fila de alerta como en F4. En los dos caminos la fila
+           (cuando la hay) está en `setup_log`; en el de ejecución la escribe
+           `ExecutionService` con sus gates y su `validated`.
 
         `results` lleva el desenlace de cada símbolo (`alerta`, `dedup`, `sin_senal`,
-        `sin_datos`, `sin_atr`, `error`), `events` solo las alertas escritas (o con el
-        intento fallido) y `errors` los símbolos que no se pudieron mirar. Van
-        separados porque son tres preguntas distintas: ¿qué encontré?, ¿qué escribí?,
-        ¿qué no pude mirar?.
+        `sin_datos`, `sin_atr`, `error`; con ejecución, `ejecutado` dice si la orden
+        salió), `events` solo las alertas escritas (o con el intento fallido) y
+        `errors` los símbolos que no se pudieron mirar. Van separados porque son tres
+        preguntas distintas: ¿qué encontré?, ¿qué escribí?, ¿qué no pude mirar?.
         """
         momento = ahora or datetime.now().astimezone()
         habilitado, motivo, perfil = self._config()
+        conf_auto = bool(perfil.get("auto_execute"))
+        auto = bool(habilitado and conf_auto and self._ejecucion is not None)
         riesgo = self._riesgo_del_dia()
         riesgo_error = riesgo.get("error")
         riesgo_log = {} if riesgo_error else riesgo
@@ -334,6 +411,7 @@ class CtaAlertService:
         auditados = 0
         perdidas = 0
         dedups = 0
+        ejecutadas = 0
         bars = int(perfil.get("bars") or BARS_DEFECTO)
         timeframe = str(perfil.get("timeframe") or TIMEFRAME_DEFECTO).upper()
 
@@ -363,13 +441,16 @@ class CtaAlertService:
 
                 resultado, evento = self._evalua(
                     symbol, timeframe, cerradas, formante, engine,
-                    magic, comment, riesgo_log, riesgo_error)
+                    magic, comment, riesgo_log, riesgo_error,
+                    auto=auto, auto_conf=conf_auto)
                 results.append({**base, **resultado})
                 if evento is not None:
                     if evento.get("event") == "dedup":
                         dedups += 1
                     else:
                         events.append(evento)
+                        if evento.get("auto_ejecutado"):
+                            ejecutadas += 1
                         if evento.get("auditado"):
                             auditados += 1
                         else:
@@ -388,9 +469,10 @@ class CtaAlertService:
             "audit_fallidos": perdidas,
             "riesgo": riesgo,
             "riesgo_error": riesgo_error,
-            "auto_ejecute": False,
+            "auto_ejecute": auto,
             "auto_ejecute_disponible": AUTO_EJECUCION_DISPONIBLE,
-            "dry_run": True,
+            "auto_ejecutadas": ejecutadas,
+            "dry_run": not auto,
         }
 
     # -- evaluación de un símbolo ------------------------------------------------
@@ -406,8 +488,15 @@ class CtaAlertService:
         comment: str,
         riesgo: Dict[str, Any],
         riesgo_error: Optional[str],
+        auto: bool = False,
+        auto_conf: bool = False,
     ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
-        """`(resultado, evento)`. El evento es `None` si no hay alerta que contar."""
+        """`(resultado, evento)`. El evento es `None` si no hay alerta que contar.
+
+        `auto` es el interruptor efectivo del ciclo (YAML + puerto); `auto_conf` es
+        solo lo que pide el YAML, para poder decir POR QUÉ no se intentó cuando la
+        config lo pedía y el cable faltaba.
+        """
         base_status: Dict[str, Any] = {"bars_closed": len(cerradas)}
         highs = [float(v["high"]) for v in cerradas]
         lows = [float(v["low"]) for v in cerradas]
@@ -473,6 +562,66 @@ class CtaAlertService:
         if riesgo_error:
             breakdown["risk_state_error"] = riesgo_error
 
+        # La dedup se guarda ANTES de la fila y ANTES del intento de ejecución,
+        # igual que `_audita_rechazo` del watcher: si el disco falla O el gate
+        # rechaza, no se reintenta en cada ciclo de un D1 (la barra de señal no
+        # cambia y perseguir el mismo rechazo hasta el martes sería ruido). El
+        # evento lo dice con `auditado`/`ejecucion_motivo`.
+        self._alertas[clave] = bar_time
+
+        if auto:
+            # La fila la escribe ExecutionService (con sus gates y su validated);
+            # aquí solo se traduce `(cuerpo, status)` en evento y resultado.
+            try:
+                cuerpo, status = self._ejecucion.execute_market_trade(
+                    symbol=clave, action=direction, volume=None,
+                    sl_distance=abs(entry - sl),
+                    # Sin objetivo: la salida la decide el trailing D1, y un target
+                    # congelado aquí sería una regla que F2 no convalidó.
+                    no_tp=True,
+                    magic=magic, comment=comment or None,
+                    # 0.0 y no `None`: la columna score es numérica; el CTA no tiene
+                    # gate de score (lo tiene el watcher).
+                    score=0.0, verdict=VERDICTO_CTA,
+                    invalidate_level=None,
+                    # El fill planificado es el next-open de la señal: si el precio
+                    # se aleja de él, el gate de deriva lo dice (y queda auditable).
+                    planned_entry=entry,
+                    components=breakdown,
+                    context={"magic": magic, "profile": PERFIL_ESPERADO,
+                             "comment": comment},
+                    timeframe=timeframe, source=SOURCE_CTA,
+                )
+            except Exception as exc:  # noqa: BLE001 - un puerto roto no tumba el scan
+                log.warning("execute_market_trade revintió para %s: %s", clave, exc)
+                cuerpo, status = {"error": str(exc)}, 500
+            ok = status == 200 and bool(cuerpo.get("ok"))
+            setup_id = cuerpo.get("setup_id")
+            evento = {
+                "symbol": clave,
+                "timeframe": timeframe,
+                "event": "alerta",
+                "direction": direction,
+                "entry": entry,
+                "sl": sl,
+                "fill": fill,
+                "signal_bar": datetime.fromtimestamp(bar_time, tz=timezone.utc).isoformat(),
+                "auto_ejecutado": ok,
+                "ejecucion_status": status,
+                # La fila de ESTE intento la escribe ExecutionService, no este
+                # servicio: `auditado` es que setup_id existe, venga de donde venga.
+                "auditado": setup_id is not None,
+            }
+            if not ok:
+                evento["ejecucion_motivo"] = (
+                    cuerpo.get("error") or cuerpo.get("status")
+                    or "rechazada sin motivo declarado")
+            return (
+                {**base_status, "status": "alerta", "ejecutado": ok,
+                 "auditado": setup_id is not None},
+                evento,
+            )
+
         fila = {
             "symbol": clave,
             "timeframe": timeframe,
@@ -498,11 +647,9 @@ class CtaAlertService:
             "source": SOURCE_CTA,
         }
 
-        # La dedup se guarda ANTES de la fila, igual que `_audita_rechazo` del
-        # watcher: si el disco falla, la fila se pierde y NO se reintenta (el evento
-        # lo dice con `auditado: false`), porque reintentar en cada ciclo de un D1
-        # escribiría el mismo fallo para siempre.
-        self._alertas[clave] = bar_time
+        # La dedup ya está puesta (arriba): si el disco falla, la fila se pierde y
+        # NO se reintenta, porque reintentar en cada ciclo de un D1 escribiría el
+        # mismo fallo para siempre.
         id_fila = self._registra(fila)
         evento = {
             "symbol": clave,
@@ -516,13 +663,162 @@ class CtaAlertService:
             "auto_ejecutado": False,
             "auditado": id_fila is not None,
         }
+        if auto_conf and self._ejecucion is None:
+            # El YAML lo pedía y no hubo intento: que el motivo esté en el EVENTO
+            # (además de en `estado()`) es lo que impide leer "no se intentó" como
+            # "no había señal".
+            evento["ejecucion_motivo"] = MOTIVO_SIN_PUERTO_DE_EJECUCION
         return {**base_status, "status": "alerta", "auditado": id_fila is not None}, evento
+
+    # -- salidas: trailing D1 ----------------------------------------------------
+
+    def gestionar_salidas(self, ahora: Optional[datetime] = None) -> Dict[str, Any]:
+        """Un pase de trailing chandelier sobre las posiciones del magic CTA.
+
+        La otra mitad de F5: el stop que pone la apertura no puede ser el último
+        stop que el sistema pone jamás, o la regla convalidada en F2 (ratchet "nunca
+        afloja", barra a barra) existiría solo en el backtest. Por posición:
+
+        1. `ExecutionService.positions(magic)` — solo las del CTA. Sin posiciones
+           el pase es correcto y vacío (`[], None` no es error).
+        2. Con las barras D1 del símbolo, SOLO las cerradas (misma regla que el
+           scan), el ATR de la última y su extremo (high en BUY, low en SELL) como
+           `ref`: exactamente la convención del backtest (`research/cta.py`).
+        3. `exit_policy.trailing_stop(...)` devuelve el candidato o `None` — el
+           ratchet no afloja, y en ese caso NO se llama al bróker.
+        4. Si hay candidato, `ExecutionService.modify_stop`. Aquí no hay lista
+           blanca, riesgo del día ni noticias: mover un stop no ABRÍ riesgo
+           (ver `modify_stop`), y un trailing bloqueado dejaría el stop viejo
+           justo cuando más se necesita. Tampoco se escribe fila en `setup_log`:
+           la fila de esa posición existe desde su apertura.
+
+        Nunca lanza: cualquier fallo (puerto, fila rota, un símbolo sin datos) sale
+        como `status`/`error` en la respuesta, porque esto se dispara desde una ruta
+        y el bucle del operador tiene que poder leer el resultado aunque algo fallen.
+        """
+        momento = ahora or datetime.now().astimezone()
+        habilitado, motivo, perfil = self._config()
+        base: Dict[str, Any] = {
+            "trail_at": momento.isoformat(),
+            "enabled": habilitado,
+            "motivo": motivo,
+            "profile": PERFIL_ESPERADO,
+            "magic": perfil.get("magic"),
+            "exit_policy": exit_policy.policy_for(PERFIL_ESPERADO),
+            "positions": 0,
+            "results": [],
+            "modificados": 0,
+            "sin_cambio": 0,
+            "sin_sl": 0,
+            "errores": 0,
+            "error": None,
+        }
+        if not habilitado:
+            # Sin perfil válido no hay magic confiable ni motor: mover el stop de
+            # QUIÉN con qué parámetros sería adivinar.
+            return base
+        if self._ejecucion is None:
+            return {**base, "error": "no hay puerto de ejecución cableado: no hay "
+                                     "nada con lo que mover los stops"}
+        try:
+            filas, error = self._ejecucion.positions(magic=int(perfil["magic"]))
+        except Exception as exc:  # noqa: BLE001 - un puerto roto se reporta, no revienta
+            return {**base, "error": str(exc)}
+        if filas is None:
+            return {**base, "error": error}
+
+        engine = self._engine(perfil)
+        results: List[Dict[str, Any]] = []
+        modificados = sin_cambio = sin_sl = errores = 0
+        for pos in filas:
+            try:
+                r = self._trail_de_posicion(dict(pos), engine, momento)
+            except Exception as exc:  # noqa: BLE001 - una fila rota no tumba el pase
+                r = {"ticket": (pos or {}).get("ticket"),
+                     "symbol": (pos or {}).get("symbol"),
+                     "status": "error", "motivo": str(exc)}
+            results.append(r)
+            est = r.get("status")
+            if est == "modificado":
+                modificados += 1
+            elif est == "sin_cambio":
+                sin_cambio += 1
+            elif est == "sin_sl":
+                sin_sl += 1
+            else:
+                # `error`, `sin_datos`, `sin_atr`: para ESTE pase no se pudo mover
+                # el stop. El motivo de cada uno está en su fila.
+                errores += 1
+        return {**base, "positions": len(filas), "results": results,
+                "modificados": modificados, "sin_cambio": sin_cambio,
+                "sin_sl": sin_sl, "errores": errores}
+
+    def _trail_de_posicion(self, pos: Dict[str, Any], engine: Dict[str, Any],
+                           momento: datetime) -> Dict[str, Any]:
+        """El desenlace de UNA posición: `modificado`, `sin_cambio`, `sin_sl`,
+        `sin_datos`, `sin_atr` o `error`.
+
+        `sin_sl` es deliberado: una posición sin stop (el bróker permite abrir sin
+        SL) no recibe uno inventado aquí — inventar el nivel de una salida que la
+        convalidación no evaluó sería una regla nueva disfrazada de mantenimiento.
+        """
+        ticket = pos.get("ticket")
+        base: Dict[str, Any] = {"ticket": ticket, "symbol": pos.get("symbol")}
+        if not ticket:
+            return {**base, "status": "error", "motivo": "la fila no trae ticket"}
+        tipo = str(pos.get("type") or "").upper()
+        if tipo not in ("BUY", "SELL"):
+            return {**base, "status": "error",
+                    "motivo": "dirección desconocida: {0!r}".format(pos.get("type"))}
+        try:
+            sl = float(pos.get("sl") or 0.0)
+        except (TypeError, ValueError):
+            sl = 0.0
+        if sl <= 0.0:
+            return {**base, "status": "sin_sl",
+                    "motivo": "la posición no tiene stop que mover (no se inventa uno)"}
+
+        symbol = str(pos.get("symbol") or "")
+        velas, error = self._velas(symbol, TIMEFRAME_CONVALIDADO, BARS_DEFECTO)
+        if velas is None:
+            return {**base, "status": "sin_datos", "motivo": error}
+        cerradas, _formante = self._particion(velas, momento)
+        if len(cerradas) < engine["atr_n"]:
+            return {**base, "status": "sin_datos",
+                    "motivo": "{0} barras cerradas, hace falta {1} (atr_n)".format(
+                        len(cerradas), engine["atr_n"])}
+
+        atrs = cta.atr([float(v["high"]) for v in cerradas],
+                       [float(v["low"]) for v in cerradas],
+                       [float(v["close"]) for v in cerradas], n=engine["atr_n"])
+        atr_value = atrs[-1]
+        if atr_value is None:
+            return {**base, "status": "sin_atr",
+                    "motivo": "el ATR de la última barra cerrada no es calculable"}
+
+        # ref = extremo de la ÚLTIMA barra cerrada, la convención exacta con la que
+        # el backtest recorría el stop barra a barra (research/cta.py L177-179).
+        ultima = cerradas[-1]
+        ref = float(ultima["high"]) if tipo == "BUY" else float(ultima["low"])
+        nuevo = exit_policy.trailing_stop(tipo, sl, ref, float(atr_value),
+                                          engine["mult"])
+        if nuevo is None:
+            # El ratchet no mejora: sin llamada al bróker, sin fila, sin ruido.
+            return {**base, "status": "sin_cambio", "sl": sl}
+
+        cuerpo, status = self._ejecucion.modify_stop(ticket, sl=nuevo)
+        if status == 200:
+            return {**base, "status": "modificado", "sl": sl, "sl_nuevo": nuevo}
+        return {**base, "status": "error", "sl": sl, "sl_nuevo": nuevo,
+                "motivo": cuerpo.get("error"), "http": status,
+                "broker_status": cuerpo.get("status")}
 
 
 __all__ = [
     "AUTO_EJECUCION_DISPONIBLE",
     "BARS_DEFECTO",
     "MOTIVO_SIN_AUTO_EJECUCION",
+    "MOTIVO_SIN_PUERTO_DE_EJECUCION",
     "SOURCE_CTA",
     "TIMEFRAME_CONVALIDADO",
     "VERDICTO_CTA",
