@@ -1418,3 +1418,118 @@ Registro: ROADMAP/CHECKLIST/PROJECT_STATE. **Implementado 2026-10-07**: `core/ex
 `test_execution_service.py` 58→87, `test_mt5_execution.py` 29→40,
 `test_cta_alert_service.py` reescrito 37→60, `TestRutasCta` 7→8 → suite **`1750 passed,
 2 xfailed`** (+129, antes 1621).
+
+### D-079 - Recalibración de `regime()`: percentil rolling de ATR% + guardia de Hurst (prioridad 1 del operador)
+
+Deuda abierta desde D-076: el ratio `span/cuerpo` con cortes fijos 6.0/3.0 dio 100 %
+"expansión" en datos reales (p50 ≈ 15) y dejó el interruptor F3 en 0 fills por
+construcción. El operador eligió (sobre las 5 mejoras propuestas): atacar SOLO el
+régimen, con **percentiles rolling + Hurst** (sin HMM), tocando `core/` y re-ejecutando
+F3. Parámetros congelados ANTES de mirar el PnL de F3 (D-065) — esta sección se escribe
+en ese punto; el resultado de F3 se añade debajo tras ejecutarlo.
+
+**Regla final (D-079)**, en `core/risk_engine.py::regime`:
+
+1. `vol_percentile` = percentil del ATR% (media simple de TR14/close×100) de la última
+   barra dentro de los últimos 250 valores: `<=20` compresión, `>=80` expansión.
+   Sin dispersión (serie plana) → percentil 50 → neutro; sin `REGIME_MIN_BARS=60` barras
+   → neutro declarado (nunca un estado inventado).
+2. `hurst_exponent()` = R/S modificado puro (subseries 16/32/64/128 sobre hasta 252
+   retornos, mínimos cuadrados; `None` con <128 retornos o closes no positivos). Único
+   papel en la decisión: **guardia de tendencia** — `H >= 0.70` fuerza "expansion" y
+   excluye de "rango" (una compresión persistente no es revertible); `H <= 0.45` solo
+   etiqueta el diagnóstico.
+
+**Cortes de Hurst calibrados contra su nula, no contra PnL**: `regime_scan.py --null`
+(300 series RW semilladas, 252 retornos) → R/S p10=0.447, p50=0.573, p95=0.727 (sesgo
++0.07 del R/S a esta escala); cortes 0.45/0.70 = 10.3 % falsos "antipersistentes" y
+8.3 % falsos "persistentes" sobre ruido, con potencia 82 %/92 % sobre AR(1) ρ=−0.8/+0.8.
+Los cortes 0.55/0.60 del primer borrador habrían colapsado la banda "neutro" (el ruido
+solo ya sienta en 0.573).
+
+**Por qué la guardia de tendencia y no un segundo filtro de rango** (evidencia del
+scan D1 × 5 símbolos, 1.296 señales MR, ANTES de F3): la regla original
+`percentil<=20 AND H<=0.45` dejó "rango" en el **2.1 %** de las señales (<5 %, criterio
+pre-registrado de no-degeneración = degenera como el ratio 6/3). La descomposición
+mostró que el estrangulador es el Hurst (`H<=0.45` cumple solo el 6.2 % de las ventanas
+reales; el percentil solo deja el 32.3 %), y el fallback pre-registrado de estado
+retrasado tampoco rescata (2.5 %). Se adoptó la regla compuesta `percentil<=20 AND
+H<0.70` ("compresión sin tendencia persistente"): panel **rango 29.4 % / neutro 49.9 %
+/ expansión 20.8 %** (criterio a: tres estados con masa sana) y en señales **30.9 %**
+(criterio b: ≥10 %). Ambos criterios estaban registrados en el docstring del scan antes
+de correrlo; ningún criterio tocado es PnL.
+
+**Parámetros congelados**: `REGIME_PCT_WINDOW=250`, `REGIME_P_RANGO=20`,
+`REGIME_P_EXPANSION=80`, `REGIME_ATR_N=14`, `REGIME_MIN_BARS=60`,
+`REGIME_HURST_WINDOW=252`, `REGIME_HURST_MIN=128`, `REGIME_HURST_LO=0.45` (etiqueta),
+`REGIME_HURST_HI=0.70` (decisión), `regime()` lookback de F3 → 250. Claves legacy
+(`ratio`, `span`, `avg_body`) siguen saliendo como diagnóstico (F3 las loguea).
+
+**Tests (deuda D-076 pagada)**: fixture real `tests/fixtures/regime_d1_samples.json`
+(3 ventanas D1 de 253 barras, una por estado, exportadas por el scan y verificadas
+contra su expectativa) + Hurst semillado contra la nula + degradaciones → `TestRegime`
+3→19 tests; suite **1764 passed, 2 xfailed** (antes 1750). Registro: scan JSON en
+`trinity_data/research/results/regime_scan_*.json`, `MEJORAS_MR_VWAP.md`.
+
+**Resultado de F3 (mismo día, tras congelar lo anterior)**: `python research/backtest_mr.py`
+con el interruptor nuevo → 1.296 señales, 820 saltadas por régimen, 40 por embargo,
+**109 fills (77 IS + 32 OOS)**; señales que llegan al gate: expansión 219, neutro 601,
+rango 109 (todos los rango entran). **Veredicto PASS** con el criterio congelado de
+F2 (`OOS exp_ticks_net = +198,57 > 0`, n=32 ≥ 10, fricción 1 tick/lado ya descontada);
+la referencia sin gate sigue en −406 ticks OOS, así que el salto lo compra el
+interruptor (tesis D-071). Matices registrados en `MEJORAS_MR_VWAP.md §5`: por USD el
+OOS queda −59,43/trade (break-even), IS sale −287 ticks (el veredicto, como en F2,
+solo mira OOS) y exp_ticks/exp_usd se contradicen por el ponderado por símbolo del
+sizing. **Un solo run, ninguna iteración contra el resultado (D-065)**. Resultado:
+`backtest_mr_20261008T023119Z.json`. Suite completa: **1764 passed, 2 xfailed**
+(antes 1750). Roadmap: F4/F5 siguen intactos (son CTA); el MR queda disponible como
+candidato a F6.
+
+### D-080 - Control de layout del dashboard en un desplegable + chat redimensionable
+
+**Contexto:** el usuario pidió poder reorganizar el dashboard: presets de layout,
+paneles plegables, tabs de agrupación y chat redimensionable.
+
+**Decisiones:**
+- El control de layout es un **desplegable/select** en el topbar (`#layoutPreset`),
+  no botones sueltos (menos superficie y más escalable).
+- Cuatro presets: `single` (original), `focus` (todo colapsado), `two-column`
+  (grid, sin mover DOM) y `tabs` (agrupación por pestañas: panel research→
+  Investigación, orderflow→Order Flow, news→Calendario, positions/history/db→Tablas).
+- **`--chat-w: 380px`** como ancho por defecto del chat (no 400px ni más), con
+  asa de arrastre que ajusta la variable CSS (clamp 300–560px) y persistencia en
+  `localStorage["dashboard_layout_v1"]`.
+- Toda operación que cambia geometría dispara `CustomEvent("layoutchange")`;
+  `main.js` responde con `chart/ofChart/resChartObj.resize()` en `requestAnimationFrame`.
+
+**Por qué así y no un plugin:** el dashboard es ECharts puro sin build
+(`static/echarts.min.js`); un sistema de layout en vanilla (~una clase con estado)
+es auditado, testeable por personas y no introduce dependencias.
+
+**Consecuencia asumida:** el estado de layout es solo de UI (localStorage); no
+hay sincronización con el backend. Documentado en `MEJORAS_DASHBOARD_LAYOUT.md`.
+Suite tras el cambio: **1764 passed, 2 xfailed** (sin regresión; solo estática).
+
+### D-081 - El layout se queda SOLO en modo foco en gráfico (se eliminan presets y tabs)
+
+**Contexto:** tras entregar el sistema de D-080 con 4 presets +
+tabs, la revisión pidió "dejar solo el layout de foco en gráfico".
+
+**Decision:**
+- Se eliminan el desplegable `#layoutPreset`, los presets `single`/`two-column`/
+  `tabs` y todo el bloque de pestañas (`buildTabs`, `tabbed-panels`, `panel-tabs`,
+  `tab-pane`) — JS y CSS sin rastro.
+- El modo foco pasa a ser el **único comportamiento**: al cargar, los paneles
+  secundarios abren colapsados (por defecto `DEFAULT_COLLAPSED` en `layout.js`),
+  con chevron para expandirlos uno a uno y estado persistente.
+- Se conservan el colapso manual, el resizer del chat (`--chat-w: 380px`,
+  clamp 300–560px) y el evento `layoutchange` (sigue alimentando `chart.resize()`).
+
+**Por qué:** menos superficie que mantener (y mayor claridad) que 4 presets si
+el usuario solo usa uno. La lógica de "foco" era la única que aportaba el retorno
+que se pedía: que el gráfico sea protagonista.
+
+**Consecuencia asumida:** los paneles secundarios colapsan por defecto pero el
+usuario los puede dejar abiertos de forma persistente. Harness dom-shim actualizado
+a la nueva API (14 asserts OK); documento `MEJORAS_DASHBOARD_LAYOUT.md` revisado.
+Suite tras la simplificación: **1764 passed, 2 xfailed**.

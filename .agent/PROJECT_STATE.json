@@ -1,9 +1,9 @@
 {
   "project_name": "MultiMarket Quant Engine",
   "version": "0.1.0",
-  "active_phase": "Phase 7 - Multi-mercado (forex + B3 + cripto)",
-  "status": "f3_mr_vwap_no_convalidado_mr_falla_la_friccion_y_regime_nunca_dispara_rango_sin_tocar_core",
-  "last_updated": "2026-10-06",
+  "active_phase": "F6_MR_VWAP_ALERTA",
+  "status": "f6_integrado",
+  "last_updated": "2026-10-09",
   "blockers": [],
   "repo": {
     "versioned": true,
@@ -150,10 +150,13 @@
     "MEJORAS_CTA_D1.md (F2/D-074): historico de diseno, split y veredicto PASS",
     "backtest CTA D1: dataset (6.000 barras), JSON de resultados y veredicto PASS en trinity_data, fuera del repo",
     "research/mr.py (F3/D-075): motor puro (vwap rolling tipico ponderado con warm-up None, bandas +/-k*ATR, senal contraria sin lookahead, target=VWAP de la senal, SL primero, hueco solo empeora el SL, MAX_HOLD/END_OF_DATA)",
-    "research/backtest_mr.py (F3/D-076): replica F2 con el interruptor regime(candles[:i+1])=='rango' por senal + referencia corriendo SIN gate; reusa split/stats/verdict de backtest_cta.py",
+    "research/backtest_mr.py (F3/D-076/D-079): replica F2 con el interruptor regime(candles[:i+1])=='rango' por senal (lookback 250 desde D-079) + referencia corriendo SIN gate; reusa split/stats/verdict de backtest_cta.py",
     "tests/unit/test_mr.py (F3, 18 tests deterministas de lapiz)",
-    "MEJORAS_MR_VWAP.md (F3/D-076): historico de diseno, veredicto NO CONVALIDADO y deuda de regime()",
-    "backtest MR VWAP D1: JSON de resultados (0 fills con gate, referencia sin gate) en trinity_data, fuera del repo"
+    "MEJORAS_MR_VWAP.md (F3/D-076/D-079): historico de diseno, veredicto NO CONVALIDADO del run viejo, recalibracion del regime() y re-ejecucion PASS",
+    "backtest MR VWAP D1: JSON de resultados (0 fills con el gate viejo; 109 fills y PASS con el recalibrado) en trinity_data, fuera del repo",
+    "core/risk_engine.py::regime recalibrado (D-079): percentil rolling de ATR% (ventana 250, cortes 20/80) + guardia de Hurst (R/S puro; H>=0.70 fuerza expansion y excluye rango; cortes 0.45/0.70 calibrados contra su nula); degradaciones declaradas (neutro sin datos); claves legacy 'ratio/span/avg_body' solo diagnostico",
+    "research/regime_scan.py (D-079): modo --null (calibracion nula del Hurst, 300 RW semilladas) + scan de frecuencias D1 x 5 simbolos en barras y senales MR, con criterios de no-degeneracion registrados en su docstring ANTES de correrlo",
+    "tests/fixtures/regime_d1_samples.json (D-079/D-076): 3 ventanas reales D1 de 253 barras (una por estado) exportadas y verificadas por el scan; TestRegime 3->19 tests"
   ],
   "in_progress": [
     "el bucle del watcher: cuando exista, entra por ExecutionService (D-063). El scan por HTTP ya esta."
@@ -377,7 +380,7 @@
       "D-032": "completion es un seam: LiteLLM se importa dentro de la llamada, y un test AST lo impide subirlo",
       "D-033": "done es un invariante del stream, y no hay failover despues del primer delta",
       "D-034": "A la traza el digest con argumentos; al modelo, el payload completo",
-      "D-035": "La degradacion de un modelo local se avisa con status, y un tool call escrito se ejecuta sin enseñarse"
+      "D-035": "La degradacion de un modelo local se avisa con status, y un tool call escrito se ejecuta sin ense\u00f1arse"
     },
     "bugs_found_in_ref": [
       "REF emitia done en cinco ramas del bucle: anadir un camino nuevo lo olvidaba y el cliente se quedaba con el stream abierto para siempre.",
@@ -510,7 +513,7 @@
     "decisions": {
       "D-048": "Las fabricas de tests llevan la unidad del mercado, no la del forex: `digits` en make_candles/make_trades (round(x,5) sobre WIN deja una serie que ningun feed emite) y `current_price` obligatorio en make_snapshot_from_scenario, que antes valaba BTCUSDT contra el precio de EURUSD si faltaba.",
       "D-049": "Los scenarios de B3/cripto se validan contra config/, no contra el criterio del test: lot_calculator, market_type y session_id tienen que coincidir con asset_sources_map.yaml, y la ventana UTC del scenario con sessions de trading_hours.json (corrida al UTC del exchange). Una sesion escrita a mano seria un calendario paralelo.",
-      "D-050": "Un pip_override descarta la convencion forex: si el bróker fija la unidad a mano, 'pips' es una etiqueta falsa aunque el simbolo cotice a 3 decimales. El minicontrato de dolar de la B3 sin esto reportaba un SL de 30 puntos como '3,0 pips'."
+      "D-050": "Un pip_override descarta la convencion forex: si el br\u00f3ker fija la unidad a mano, 'pips' es una etiqueta falsa aunque el simbolo cotice a 3 decimales. El minicontrato de dolar de la B3 sin esto reportaba un SL de 30 puntos como '3,0 pips'."
     },
     "bugs_found": [
       "SymbolSpec.pip_quote miraba solo los digitos e ignoraba el pip_override: con 3 digitos + override (WDO) la unidad era el punto de 0,001 pero la etiqueta decia 'pips'. Es el mismo error que se corrigio para el oro, en el otro sentido: el override existe justo para los simbolos que no cotizan como un par de divisas.",
@@ -559,7 +562,7 @@
       "D-062",
       "D-063"
     ],
-    "verificado_contra_bróker_real": [
+    "verificado_contra_br\u00f3ker_real": [
       "SYMBOL_FILLING_MODE es MASCARA de bits: EURUSD=1 (solo FOK), XAUUSD=3, DE40/US500=2",
       "ORDER_FILLING_FOK=0, ORDER_FILLING_IOC=1",
       "order_send devuelve objeto MqlTradeResult o None, nunca dict"
@@ -715,12 +718,33 @@
     "pipeline": "smc_engine.analyze (300 velas + PDH/PDL del dia UTC anterior CON DATOS) -> risk_engine.setup_score -> setup_gate.evaluate_gate (no sim.py de REF)",
     "resultados": {
       "zone_ttl": {
-        "is": {"n": 43, "win": "20.9 %", "exp_pips": -6.465, "exp_usd": -6950},
-        "oos": {"n": 23, "win": "39.1 %", "exp_pips": 0.087, "exp_usd": 50, "pf": 1.01}
+        "is": {
+          "n": 43,
+          "win": "20.9 %",
+          "exp_pips": -6.465,
+          "exp_usd": -6950
+        },
+        "oos": {
+          "n": 23,
+          "win": "39.1 %",
+          "exp_pips": 0.087,
+          "exp_usd": 50,
+          "pf": 1.01
+        }
       },
       "next_open": {
-        "is": {"n": 105, "win": "47.6 %", "exp_pips": -3.714, "exp_usd": null},
-        "oos": {"n": 51, "win": "49.0 %", "exp_pips": -4.196, "exp_usd": -5350}
+        "is": {
+          "n": 105,
+          "win": "47.6 %",
+          "exp_pips": -3.714,
+          "exp_usd": null
+        },
+        "oos": {
+          "n": 51,
+          "win": "49.0 %",
+          "exp_pips": -4.196,
+          "exp_usd": -5350
+        }
       }
     },
     "hallazgos": [
@@ -763,7 +787,7 @@
       "F0 - Cierre limpio de 6E (solo administrativo: commit + docs de research/, sin deploy demo); ROTAR DATABENTO_API_KEY DEJADO COMO ESTA por decision del usuario",
       "F1 - Infraestructura multi-perfil: strategy_map (magic->perfil), strategy_<perfil>.yaml via STRATEGY_PATH, sl_distance_by_symbol -> by_profile_by_symbol, daily_risk_state con DD/topes por magic y global; ILOF = modulo presente en investigacion",
       "F2 - Convalidacion CTA en research/: OHLCV D1 de MT5 demo (EURUSD, XAUUSD, US500, GBPUSD, AUDUSD, ~4,7 anios), breakout proximo-open + trailing ATR + vol-targeting en lot_calculator; GATE cumplido (OOS supera la friccion) -> CONVALIDA, Veredicto PASS (D-074)",
-      "F3 - Convalidacion Mean Reversion (VWAP) (D-075/D-076): mismo dataset y proceso que F2, motor puro research/mr.py (VWAP 20 + bandas 2*ATR, target=VWAP, max_hold 10) con regime() como interruptor -> NO CONVALIDADO: 0 fills con el gate porque regime() devuelve 'expansion' SIEMPRE (D1 y M15), y sin gate no supera la friccion (OOS 120 trades, PF 0.968, -406 ticks)",
+      "F3 - Convalidacion Mean Reversion (VWAP) (D-075/D-076/D-079): mismo dataset y proceso que F2, motor puro research/mr.py (VWAP 20 + bandas 2*ATR, target=VWAP, max_hold 10) con regime() como interruptor -> PASS tras la recalibracion D-079 (run viejo D-076: 0 fills porque el ratio 6/3 daba 'expansion' SIEMPRE; recalibrado a percentil rolling + guardia de Hurst: 109 fills, OOS 32 trades, exp_ticks_net +198.57 con friccion ya descontada; sin gate sigue en -406 ticks)",
       "F4 - Despliegue en alerta ENTREGADO (D-077): CTA en modo alerta con magic 8882027 y perfil propio strategy_cta.yaml, servicio cta_alert_service.py + rutas GET /api/cta/status y POST /api/cta/scan fuera del ciclo del watcher, cero ordenes reales estructurales (no importa ExecutionService, assertado por AST); core/ intacto salvo STRATEGY_CTA_PATH",
       "F5 - Ejecucion multi-estrategia ENTREGADO (D-078): CTA ejecutable via ExecutionService (execution_from en Runtime.cta_service()) con las mismas puertas que el watcher, activado por auto_execute:false (default en strategy_cta.yaml); trailing D1 en core/exit_policy.py (ratchet chandelier; research/ queda SOLO en alerta); nueva ruta POST /api/cta/trail; symbols_allow ampliado a los 5 simbolos CTA; sin ruta auto-execute (el interruptor ES la config)"
     ],
@@ -833,7 +857,11 @@
     "datos": {
       "fuente": "MT5 demo copy_rates D1 (MetaQuotes-Demo, cuenta 112125897)",
       "simbolos": [
-        "EURUSD", "XAUUSD", "US500", "GBPUSD", "AUDUSD"
+        "EURUSD",
+        "XAUUSD",
+        "US500",
+        "GBPUSD",
+        "AUDUSD"
       ],
       "barras_por_simbolo": 1200,
       "raiz": "trinity_data/research/cta/d1/ (fuera del repo)"
@@ -871,11 +899,12 @@
   "f3_mr_vwap": {
     "hito": "F3 - Convalidacion del Mean Reversion VWAP (VWAP rolling + bandas ATR + regime() como interruptor)",
     "fecha": "2026-10-07",
-    "estado": "NO CONVALIDADO; sin tocar la ejecucion ni core/ (decision del operador)",
+    "estado": "PASS (re-ejecucion D-079 tras recalibrar el interruptor; el run historico D-076 fue NO CONVALIDADO por un gate que nunca abria)",
     "decisiones": [
       "D-071 (roadmap)",
       "D-075 (diseno del motor, reuso del dataset D1 de F2 y del interruptor)",
-      "D-076 (veredicto NO CONVALIDADO + deuda regime())"
+      "D-076 (veredicto NO CONVALIDADO del run viejo + deuda regime())",
+      "D-079 (recalibracion regime(): percentil rolling + guardia de Hurst, nula-calibrado, scan de frecuencias, fixture real, re-ejecucion PASS)"
     ],
     "datos": {
       "fuente": "REUSA el dataset D1 de F2 (MT5 demo copy_rates, 5 simbolos, 1200 barras c/u)",
@@ -887,33 +916,42 @@
       "salida": "target fijo = VWAP de la barra de senal; SL = fill -/+ 2*ATR; SL PRIMERO si la misma barra toca ambos; hueco solo empeora el SL, TP llena en target exacto; max_hold 10 barras -> MAX_HOLD/END_OF_DATA",
       "tamano": "igual que F2: vol_target_lots (equity 100k, vol_target 0.10) + friccion 1 tick/lado con tick_size real"
     },
-    "interruptor": "backtest_mr.py evalua regime(candles[:i+1], lookback=60) en la barra de senal y solo opera si regime=='rango'; corre ademas la MISMA estrategia SIN gate como referencia",
-    "parametros_sin_calibrar": "VWAP 20, k de bandas 2.0, SL_K 2.0, max_hold 10, ATR 14 (decididos antes de ver el resultado; D-065)",
-    "perf": {
-      "con_gate": "0 fills: 1254/1296 senales saltadas por regime=='expansion', 40 embargo, 2 sin barra de fill -> INCONCLUSIVE por construccion",
-      "referencia_sin_gate_is": "n=183, win 43.2%, exp -59.23 USD, ticks -283.5, PF 0.886, maxDD -16322",
-      "referencia_sin_gate_oos": "n=120, win 47.5%, exp -16.83 USD, ticks -406.1, PF 0.968, maxDD -15051"
+    "interruptor": "backtest_mr.py evalua regime(candles[:i+1], lookback=250) en la barra de senal y solo opera si regime=='rango'; corre ademas la MISMA estrategia SIN gate como referencia",
+    "regime_recalibrado_d079": {
+      "regla": "rango = percentil ATR% <=20 en ventana 250 Y Hurst <0.70 (o None); expansion = percentil >=80 O Hurst >=0.70; neutro = resto; sin datos/planas -> neutro declarado",
+      "hurst": "R/S modificado puro (subseries 16/32/64/128, hasta 252 retornos, None con <128); cortes 0.45/0.70 de la NULA (300 RW semilladas: p10=0.447, p50=0.573, p95=0.727; 10.3%/8.3% de falsos, potencia 82%/92% sobre AR1 +/-0.8)",
+      "por_que_guardia_no_filtro": "el AND intermedio 'pct<=20 y H<=0.45' dejo rango en 2.1% de las senales (H<=0.45 cumple 6.2% de ventanas reales) y el fallback lagged tampoco rescata (2.5%): ambos <5% del criterio pre-registrado; la guardia H<0.70 excluye de rango solo las compresiones en tendencia fuerte",
+      "scan_frecuencias": "panel rango 29.4% / neutro 49.9% / expansion 20.8%; senales rango 30.9% (>=10%); criterios registrados en el docstring del scan ANTES de correrlo; ningun criterio es PnL",
+      "orden_fases": "--null -> scan -> congelar -> fixture -> tests -> lookback 250 -> F3 (un solo run, sin iterar, D-065)"
     },
-    "diagnostico_regime": {
-      "heuristica": "ratio = span(60 barras)/cuerpo_medio; >=6 expansion, <=3 rango (umbrales hardcodeados en core/risk_engine.py)",
+    "parametros_sin_calibrar": "VWAP 20, k de bandas 2.0, SL_K 2.0, max_hold 10, ATR 14 (decididos antes de ver el resultado; D-065); el UNICO cambio entre el run viejo y el nuevo es el interruptor (regla nueva + lookback 250)",
+    "perf": {
+      "con_gate_re_ejecucion_d079": "109 fills (77 IS + 32 OOS); senales al gate: expansion 219, neutro 601, rango 109; 820 saltadas por regimen, 40 por embargo",
+      "con_gate_re_ejecucion_is": "n=77, win 53.2%, exp +92.98 USD, ticks -287.25, pnl +7159.82, maxDD -5138",
+      "con_gate_re_ejecucion_oos": "n=32, win 46.9%, exp -59.43 USD, ticks +198.57, pnl -1901.73, maxDD -6813",
+      "referencia_sin_gate_oos": "n=120, win 47.5%, exp -16.83 USD, ticks -406.1, PF 0.968, maxDD -15051 (igual que D-076: el salto lo compra el interruptor)",
+      "matices": "exp_ticks y exp_usd se contradicen por el ponderado por simbolo del sizing (IS +USD/-ticks, OOS -USD/+ticks); el criterio congelado es por ticks y solo mira OOS (igual que F2); 32 trades OOS es el minimo comodo sobre MIN_OOS_N=10"
+    },
+    "diagnostico_regime_viejo_D076": {
+      "heuristica": "ratio = span(60 barras)/cuerpo_medio; >=6 expansion, <=3 rango (umbrales hardcodeados; YA NO DECIDEN)",
       "d1": "p50 ~15 sobre 6000 barras; 1 sola barra de 'rango' (GBPUSD)",
       "m15": "5000 barras x 5 simbolos (la temporalidad que alimenta produccion, mt5_market.py DEFAULT_TIMEFRAME='M15'): 100% expansion",
-      "test": "tests/unit/test_risk_engine.py::TestRegime solo asserta 'que corra', nunca que cada estado dispare",
-      "impacto_hoy": "regime() solo se muestra en el panel; NINGUN gate en vivo lo lee -> impacto funcional cero",
-      "deuda": "validar/calibrar umbrales 6.0/3.0 contra datos reales con tests de los tres estados; tocar core/ es decision futura"
+      "test": "el TestRegime viejo solo assertaba 'que corra'; la deuda D-076 se pago con fixture real + 19 tests"
     },
-    "veredicto": "NO CONVALIDADO: (1) con el gate, INCONCLUSIVE por construccion (nunca abre); (2) sin gate, no supera la friccion en OOS (PF 0.968, -406 ticks). El MR VWAP queda FUERA de F4/F5",
-    "suite": "1555 passed, 2 xfailed (antes de F3: 1537 passed, 2 xfailed)",
+    "veredicto": "PASS (D-079): OOS exp_ticks_net +198.57 > 0 con la friccion (1 tick/lado) ya descontada y n=32 >= MIN_OOS_N=10, con el MISMO verdict congelado de F2. Matices documentados: en USD OOS -59.43/trade (break-even) y IS -287 ticks (el veredicto solo mira OOS, como en F2). La referencia sin gate sigue en -406 ticks: el interruptor compra el salto (tesis D-071)",
+    "suite": "1764 passed, 2 xfailed (antes de D-079: 1750 passed, 2 xfailed; +14 de TestRegime)",
     "tests": [
-      "tests/unit/test_mr.py (18 deterministas: vwap, bandas, senales, SL primero, hueco, MAX_HOLD, END_OF_DATA)"
+      "tests/unit/test_mr.py (18 deterministas: vwap, bandas, senales, SL primero, hueco, MAX_HOLD, END_OF_DATA)",
+      "tests/unit/test_risk_engine.py::TestRegime (19: 3 estados con fixture real D1 + regla D-079 + degradaciones + Hurst semillado contra la nula + determinismo)"
     ],
     "validacion": [
+      "suite completa 1764 passed, 2 xfailed",
       "py_compile OK",
-      "lineas de core/ <= 170 (no se toco core/)",
+      "lineas de core/ <= 170 (limite del repo)",
       "ruff NO instalado en el entorno; validacion via suite + py_compile"
     ],
-    "resultado_json": "trinity_data/research/results/backtest_mr_20261007T131624Z.json",
-    "pendiente_f3": "deuda regime() (umbrales sin validar contra datos) + clave Databento (usuario); MR se revalidaria si cambian sus parametros o el interruptor"
+    "resultado_json": "trinity_data/research/results/backtest_mr_20261008T023119Z.json (re-ejecucion D-079); historico D-076: backtest_mr_20261007T131624Z.json; scans: regime_scan_*.json",
+    "pendiente_f3": "REGIME_LOOKBACK 250 y la regla D-079 estan congelados; revalidar SOLO si cambia el interruptor (re-exportar fixture con regime_scan.py --export-fixture). Clave Databento sigue pendiente (usuario). MR disponible como candidato a F6"
   },
   "f4_alerta": {
     "hito": "F4 - Despliegue en alerta del CTA Swing D1 (magic 8882027, perfil propio, cero ordenes reales)",
@@ -955,7 +993,7 @@
       "core/ solo STRATEGY_CTA_PATH (test_core_purity en verde)",
       "ruff NO instalado en el entorno; validacion via suite + py_compile"
     ],
-    "pendiente_f4": "auto_execute no existe en las rutas CTA (404 a proposito): conectarlo a ExecutionService es F5; MR VWAP sigue fuera (D-076)"
+    "pendiente_f4": "auto_execute no existe en las rutas CTA (404 a proposito): conectarlo a ExecutionService es F5 (hecho en D-078); MR VWAP convalidado desde D-079"
   },
   "f5_cta_ejecucion": {
     "hito": "F5 - Ejecucion multi-estrategia del CTA Swing D1 (ExecutionService + trailing D1 en core/exit_policy.py)",
@@ -1010,6 +1048,10 @@
       "core/exit_policy.py nuevo con purity en verde",
       "ruff NO instalado en el entorno; validacion via suite + py_compile"
     ],
-    "pendiente_f5": "Deuda de la deuda: rotar clave Databento (usuario). Next en roadmap: minimo SCRUM para los pasos 5-6 (multi-estrategia operativa). El MR VWAP sigue fuera (D-076)"
-  }
+    "pendiente_f5": "Deuda de la deuda: rotar clave Databento (usuario). Next en roadmap: minimo SCRUM para los pasos 5-6 (multi-estrategia operativa). MR VWAP convalidado (D-079), pendiente decidir su paso a alerta (candidato F6)"
+  },
+  "last_task": "F6_WATCHER_LOOP_VWAP_CABLEADO",
+  "milestones": [
+    "f6_vwap_alerta_watcher_loop"
+  ]
 }

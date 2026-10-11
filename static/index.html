@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=2">
 </head>
 <body>
   <div class="bg" aria-hidden="true">
@@ -25,9 +25,11 @@
           <p class="account-label" id="accountLabel">Conectando a MetaTrader 5...</p>
         </div>
       </div>
-      <div class="conn">
-        <span class="dot" id="connDot"></span>
-        <span id="connText">offline</span>
+      <div class="topbar-actions">
+        <div class="conn">
+          <span class="dot" id="connDot"></span>
+          <span id="connText">offline</span>
+        </div>
       </div>
     </header>
 
@@ -66,7 +68,7 @@
           </article>
         </section>
 
-        <section class="panel chart-panel">
+        <section class="panel chart-panel" data-panel="chart">
           <header class="panel-head chart-head">
             <h2>Gráfico en Vivo</h2>
             <div class="chart-controls">
@@ -270,7 +272,7 @@
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-panel="research">
           <header class="panel-head">
             <h2>Investigación / Backtest <span class="res-badge" id="resBadge" title="Pipeline research/ (offline, separado del runtime)">offline</span></h2>
             <div class="panel-actions res-controls">
@@ -329,7 +331,7 @@
           </div>
         </section>
 
-        <section class="panel of-panel">
+        <section class="panel of-panel" data-panel="orderflow">
           <header class="panel-head of-head">
             <div class="of-title">
               <h2>Order Flow · 6E</h2>
@@ -426,7 +428,7 @@
           </div>
         </section>
 
-        <section class="panel news-card">
+        <section class="panel news-card" data-panel="news">
           <header class="panel-head">
             <h2>Calendario Económico (USD / EUR)</h2>
           </header>
@@ -454,7 +456,7 @@
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-panel="positions">
           <header class="panel-head">
             <h2>Posiciones Abiertas</h2>
             <div class="panel-actions">
@@ -482,7 +484,7 @@
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-panel="history">
           <header class="panel-head">
             <h2>Últimas Operaciones</h2>
             <span class="updated" id="histUpdated"></span>
@@ -507,7 +509,7 @@
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-panel="db">
           <header class="panel-head">
             <h2>Base de Datos Local</h2>
             <div class="panel-actions">
@@ -533,6 +535,7 @@
       </main>
 
       <aside class="chat" id="chatPanel" aria-label="Asistente IA MT5">
+        <span class="chat-resizer" id="chatResizer" title="Arrastra para cambiar el ancho del chat"></span>
         <header class="chat-head">
           <div>
             <h2>MT5 Agent</h2>
@@ -768,6 +771,7 @@
 
 <script src="/static/echarts.min.js"></script>
 <script src="/static/tools.js?v=10"></script>
-<script src="/static/main.js?v=25"></script>
+<script src="/static/main.js?v=27"></script>
+<script src="/static/layout.js?v=1"></script>
 </body>
 </html>

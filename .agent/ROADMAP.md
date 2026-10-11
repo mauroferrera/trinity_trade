@@ -223,17 +223,23 @@ suite en verde como criterio de aceptación.
   OOS 47 trades, +150,99 USD/trade. Suite `1537 passed, 2 xfailed`. Sin calibración (parámetros
   clásicos fijados antes de ver el resultado). Detalle en `MEJORAS_CTA_D1.md`.
               **Gate cumplido: solo pasa si OOS supera la fricción → PASS.**
-- [x] **F3 – Convalidación Mean Reversion (VWAP)** (D-075/D-076): mismo proceso y mismo dataset
-  D1 de F2; motor puro `research/mr.py` (VWAP 20 sobre precio típico + bandas ±2×ATR, target =
-  VWAP de la señal, SL = 2×ATR, max_hold 10) con `regime()` como interruptor
-  (solo opera en `"rango"`), más una referencia sin gate. **Veredicto: NO CONVALIDADO** —
-  (1) con el gate: 0 fills, 1.254 de 1.296 señales saltadas porque `regime()` devuelve
-  `"expansion"` SIEMPRE (D1 p50≈15; sondeo M15 de producción, 5.000 barras × 5 símbolos:
-  100 %) ⟹ INCONCLUSIVE por construcción; (2) sin gate: no supera la fricción (OOS 120 trades,
-  PF 0,968, −406 ticks). Deuda documentada: los umbrales 6.0/3.0 de `regime()` nunca se
-  validaron contra datos reales (su test solo asserta "que corra"); decisión del operador,
-  no se toca `core/`. Suite `1555 passed, 2 xfailed`. Detalle en `MEJORAS_MR_VWAP.md`.
-              **Gate de la F3: solo pasa si OOS supera la fricción → NO CONVALIDA.**
+- [x] **F3 – Convalidación Mean Reversion (VWAP)** (D-075/D-076/D-079): mismo proceso y mismo
+  dataset D1 de F2; motor puro `research/mr.py` (VWAP 20 sobre precio típico + bandas ±2×ATR,
+  target = VWAP de la señal, SL = 2×ATR, max_hold 10) con `regime()` como interruptor
+  (solo opera en `"rango"`), más una referencia sin gate. Run histórico D-076: **0 fills**
+  (1.254 de 1.296 señales saltadas; el ratio span/cuerpo 6.0/3.0 daba 100 % expansión en
+  datos reales) ⟹ NO CONVALIDADO por construcción. Recalibración D-079 (prioridad 1 del
+  operador): `regime()` pasa a percentil rolling de ATR% (ventana 250, cortes 20/80) +
+  guardia de Hurst (R/S puro; H≥0.70 fuerza expansión y excluye de rango), cortes
+  calibrados contra su nula (`regime_scan.py --null`, sin ver PnL) y regla final congelada
+  tras el scan de frecuencias (criterios pre-registrados: panel rango 29.4 %, señales
+  30.9 %); tests de los TRES estados con fixture real D1 (deuda D-076 pagada, TestRegime
+  3→19). Re-ejecución (un solo run, sin iterar): **109 fills (77 IS + 32 OOS)**.
+  **Veredicto: PASS** — OOS 32 trades, win 46,9 %, `exp_ticks_net` +198,57 con fricción ya
+  descontada (referencia sin gate: −406 ticks; el interruptor compra el salto). Matices:
+  en USD OOS queda −59,43/trade (break-even) y IS sale −287 ticks (el veredicto, como en
+  F2, solo mira OOS). Suite `1764 passed, 2 xfailed`. Detalle en `MEJORAS_MR_VWAP.md §4-5`.
+              **Gate de la F3: solo pasa si OOS supera la fricción → PASS (re-ejecución D-079).**
 - [x] **F4 – Despliegue en alerta** (D-077): el CTA convalidado corre en modo alerta con
   magic `8882027` y perfil propio `config/strategy_cta.yaml`; servicio
   `api/services/cta_alert_service.py` (motor de F2 vía `research/cta.py`, dedup en memoria

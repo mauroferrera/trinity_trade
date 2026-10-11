@@ -131,6 +131,16 @@ const money = (value, currency = "$") => {
   }).format(value)}`;
 };
 
+// El sistema de layout (static/layout.js) emite "layoutchange" al colapsar
+// paneles o redimensionar el chat. Los charts con geometry alterada necesitan resize().
+document.addEventListener("layoutchange", () => {
+  requestAnimationFrame(() => {
+    if (chart) chart.resize();
+    if (ofChart) ofChart.resize();
+    if (resChartObj) resChartObj.resize();
+  });
+});
+
 const num = (value, digits = 2) => {
   if (value === null || value === undefined || Number.isNaN(value)) return "--";
   return new Intl.NumberFormat("en-US", {
@@ -2651,10 +2661,14 @@ async function loadCandles(fit = false) {
       // distingue "sin datos" (404) de "MT5 caído" (503) de un 500 real.
       const err = await res.json().catch(() => null);
       throw new Error(
-        err ? err.error : `HTTP ${res.status} ${res.statusText || "sin detalle"}`
+        (err && (err.error || err.detail)) ||
+          `HTTP ${res.status} ${res.statusText || "sin detalle"}`
       );
     }
-    const data = await res.json();
+    const payload = await res.json();
+    // La API devuelve un objeto { symbol, timeframe, candles, pdh, pdl }; se
+    // acepta también un array crudo por compatibilidad.
+    const data = Array.isArray(payload) ? payload : payload && payload.candles;
     if (!data || !data.length) throw new Error("sin velas disponibles");
 
     // ChartState solo avanza cuando las velas realmente cargaron: si el fetch

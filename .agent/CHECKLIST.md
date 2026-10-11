@@ -502,7 +502,8 @@ se filtra por métrica.
 ### Hito "Arquitectura multi-estrategia" (plan aprobado, D-071)
 
 **Fecha:** 2026-10-06 | **Estado:** F0→F5 cerradas (6E cerrado, multi-perfil F1, CTA
-convalidado en alerta F4 y ejecutable F5; MR VWAP fuera en F3). Solo queda el mín SCRUM
+convalidado en alerta F4 y ejecutable F5; MR VWAP **convalidado en F3** tras la
+recalibración del régimen D-079). Solo queda el mín SCRUM
 de los pasos 5–6 del ROADMAP.
 
 **Qué se decidió** (incorporado del operador, 4 opciones aprobadas)
@@ -572,12 +573,14 @@ superen la convalidación OOS (nada más correcto que el backtest para decidirlo
 - Suite completa tras F2: **1537 passed, 2 xfailed** (antes de F2: 1515).
 - Pendiente de F2 (fases F4/F5): ejecutar el CTA requería perfil propio + `exit_policy.py`
   + modo alerta `auto_execute=false` → **resuelto**: perfil en F4 (D-077) y
-  `core/exit_policy.py` + `auto_execute` en F5 (D-078). `regime()` sigue siendo el árbitro
-  mientras el MR VWAP no convalide (D-076) y es informativo en el panel.
+   `core/exit_policy.py` + `auto_execute` en F5 (D-078). `regime()` es el árbitro de
+   régimen: recalibrado en D-079 (percentil rolling + Hurst) y el MR VWAP **convalidó**
+   en la re-ejecución de F3; sigue informativo en el panel (ningún gate en vivo lo lee).
 
-### Sub-hito "F3 – Convalidación del Mean Reversion VWAP" (cerrado, D-075/D-076)
+### Sub-hito "F3 – Convalidación del Mean Reversion VWAP" (cerrado, D-075/D-076/D-079)
 
-**Fecha:** 2026-10-07 | **Estado:** NO CONVALIDADO; sin tocar la ejecución ni `core/`.
+**Fecha:** 2026-10-07 | **Estado: PASS** (re-ejecución D-079, tras recalibrar el
+interruptor; el run histórico D-076 fue NO CONVALIDADO por un gate que nunca abría).
 
 - `research/mr.py` (motor puro, sin pandas): `typical_price`, `vwap` (rolling de `n`,
   warm-up `None`, volumen cero ignorado), `bands` (±k×ATR), `mr_signals` (contraria al cierre
@@ -588,20 +591,29 @@ superen la convalidación OOS (nada más correcto que el backtest para decidirlo
 - `research/backtest_mr.py`: REUSA el dataset D1 de F2 y el split/stats/verdict de
   `backtest_cta.py` (mismo eje: IS 2024-11-06 | embargo 30d, 40 señales | OOS 2026-10-07);
   fricción 1 tick/lado con tick_size real, vol-target igual que F2, una posición a la vez.
-  Interruptor: `regime(candles[:i+1]) == "rango"` (lookback 60) por señal, con referencia
-  corriendo SIN el gate en paralelo.
-- **Resultado (canónico, con gate):** 0 fills — 1.254 de 1.296 señales saltadas por
+  Interruptor: `regime(candles[:i+1]) == "rango"` por señal (lookback 250 desde D-079,
+  antes 60), con referencia corriendo SIN el gate en paralelo.
+- **Run histórico D-076 (heurística vieja, 0 fills):** 1.254 de 1.296 señales saltadas por
   `regime() == "expansion"`, 40 por embargo, 2 sin barra de fill ⟹ **INCONCLUSIVE por
-  construcción** (el gate nunca abre).
-- **Resultado (referencia, sin gate):** IS 183 trades, PF 0,886 (−283 ticks); OOS 120 trades,
-  win 47,5 %, PF 0,968 (−406 ticks, −2.020 USD) ⟹ **no supera la fricción**.
-- Diagnóstico `regime()`: ratio span/cuerpo con p50 ≈ 15 en D1 (umbrales ≥6/≤3; 1 barra de
-  "rango" en 6.000) y **100 % expansión** en 5.000 barras M15 × 5 símbolos (la temporalidad
-  que alimenta producción). Su test solo asserta "que corra". Hoy es informativo en el panel
-  (sin gate en vivo) ⟹ **deuda documentada**; decisión del operador: no tocar
-  `core/risk_engine.py`.
-- Suite completa tras F3: **1555 passed, 2 xfailed** (antes de F3: 1537).
-- Validación: `py_compile` OK; ruff no instalado en el entorno (suite + `py_compile`).
+  construcción** (el gate nunca abre); sin gate: OOS 120 trades, PF 0,968 (−406 ticks,
+  −2.020 USD) ⟹ no supera la fricción. Diagnóstico: ratio span/cuerpo con p50 ≈ 15 en D1
+  (umbrales ≥6/≤3; 1 barra de "rango" en 6.000) y **100 % expansión** en 5.000 barras
+  M15 × 5 símbolos; su test solo assertaba "que corra" ⟹ deuda D-076.
+- **Recalibración D-079 (fases, en orden y sin ver PnL):** `--null` → cortes de Hurst
+  contra su nula (0.45/0.70; R/S p50=0.573 bajo RW) → scan D1×5 (`regime_scan.py`) →
+  regla `percentil≤20 AND H<0.70` congelada (la intermedia `H≤0.45` dejaba rango en el
+  2.1 % de las señales, <5 % del criterio pre-registrado; el fallback lagged, 2.5 %,
+  tampoco rescata) → criterios cumplidos (panel rango 29.4 %, señales 30.9 %) →
+  fixture real D1 en `tests/fixtures/regime_d1_samples.json` + `TestRegime` 3→19 →
+  `REGIME_LOOKBACK` 60→250 → F3. `core/risk_engine.py` tocado con el operador al frente.
+- **Resultado re-ejecución D-079 (canónico, con gate):** 109 fills (77 IS + 32 OOS);
+  señales al gate: expansión 219, neutro 601, rango 109. **OOS 32 trades, win 46,9 %,
+  `exp_ticks_net` +198,57 > 0 con fricción ya descontada** ⟹ PASS (criterio congelado
+  de F2, `MIN_OOS_N=10`). Referencia sin gate: −406 ticks OOS (el interruptor compra el
+  salto). Matices: USD OOS −59,43/trade (break-even), IS −287 ticks (veredicto solo
+  mira OOS) — documentados en `MEJORAS_MR_VWAP.md §5`.
+- Suite completa tras D-079: **1764 passed, 2 xfailed** (antes 1750).
+- Resultados: `trinity_data/research/results/{regime_scan_*,backtest_mr_20261008T023119Z}.json`.
 
 ### Sub-hito "F4 – Despliegue en alerta del CTA" (cerrado, D-077)
 
@@ -681,3 +693,28 @@ operador); trailing D1 con el motor convalidado en F2.
 
 **Pendientes explícitos:** rotar la clave de Databento (heredado, decide el usuario);
 barajar el mín SCRUM para los pasos 5 y 6 del roadmap multi-estrategia.
+
+## F6 - MR VWAP ALERTA + WATCHER LOOP
+- [x] Perfil strategy_vwap.yaml + engine D079
+- [x] Mapa strategy_map.yaml con 8882028
+- [x] Servicio vwap_alert_service + rutas /api/vwap/*
+- [x] WatcherLoop opt-in + rutas loop/start/stop
+- [x] Runtime wiring + startup/shutdown
+- [x] Tests mapa/CTA/integration pasan
+
+## Dashboard - Sistema de layout (D-080)
+- [x] `static/layout.js` (v1): estado en localStorage, presets single/focus/two-column/tabs, collapse, tabs, resizer de chat, evento `layoutchange`
+- [x] `static/index.html`: desplegable `#layoutPreset`, `data-panel` en las 7 secciones, `#chatResizer`, script `layout.js?v=1`
+- [x] `static/style.css`: `--chat-w: 380px`, variantes `body[data-layout]`, colapso, tabs, resizer, media queries
+- [x] `static/main.js`: listener `layoutchange` → `.resize()` de chart/ofChart/resChartObj
+- [x] `node --check` + validación HTTP de estáticos + suite completa (1764 passed, 2 xfailed)
+- [ ] Verificación visual en navegador (presets, colapso, tabs, asa del chat, estado tras recarga)
+
+## Dashboard - SOLO modo foco en gráfico (D-081)
+- [x] `layout.js` simplificado: solo foco (secundarios colapsados por defecto) + colapso manual + resizer; sin presets ni tabs
+- [x] Eliminado `#layoutPreset` del topbar y CSS de `two-column`/tabs en `index.html` y `style.css`
+- [x] `main.js`: comentario del listener `layoutchange` actualizado
+- [x] Harness dom-shim adaptado a la nueva API (14 asserts OK) + `node --check`
+- [x] Validación HTTP (index sin `layoutPreset`, layout.js sin tabs) + suite completa (1764 passed, 2 xfailed)
+- [ ] Verificación visual en navegador (paneles colapsados al abrir, chevrones, asa del chat, estado tras recarga)
+
