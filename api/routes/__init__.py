@@ -1,4 +1,4 @@
-"""Routers de la API: health, market, agent, journal, orderflow, macro, setup, trading, watcher y cta.
+"""Routers de la API: health, market, agent, journal, orderflow, macro, setup, trading, watcher, cta y vwap.
 
 Un router por dominio. Sin logica de negocio: solo validar, delegar y serializar.
 Cada modulo se importa por su nombre desde `api/app.py` para que un `SyntaxError`
@@ -48,12 +48,27 @@ audita, y no manda ordenes (D-063). El calculo esta en `core/setup_lifecycle.py`
 orquestacion en `api/services/watcher_service.py`. Cuando el auto-arranque entre
 entra por `ExecutionService`, no por codigo propio aqui.
 
+Ademas, `api/routes/watcher.py` sirve el bucle en segundo plano (F6, D-081):
+`/api/watcher/loop/status` (lectura), `/api/watcher/loop/start` y
+`/api/watcher/loop/stop` (escritura). El bucle (`api/services/watcher_loop.py`) es
+opt-in —por defecto la app no crea ninguna tarea—, repite `watcher_service().escanear()`
+cada `scan_interval_sec`, no ejecuta (misma regla D-063 que `POST /scan`) y se
+enciende con `watcher.background_loop: true` en `strategy.yaml` o con la ruta
+`start`.
+
 Las dos del CTA en alerta (`/api/cta/status`, `/api/cta/scan`) las sirve
 `api/routes/cta.py` (F4, D-077): el CTA Swing D1 evalua su breakout con
 `research/cta.py` y audita en `setup_log` con magic 8882027 y `trade_result
 {executed: false}`. No hay ruta de auto-execute porque no hay interruptor que
 encender: las cero ordenes son estructurales, y la ejecucion multi-estrategia es F5
 (`api/services/cta_alert_service.py`).
+
+Las dos del MR VWAP en alerta (`/api/vwap/status`, `/api/vwap/scan`) las sirve
+`api/routes/vwap.py` (F6, D-080): el Mean Reversion a VWAP evalua su banda con
+`research/mr.py` SOLO en `regime() == "rango"` (el interruptor de F3, D-079) y
+audita en `setup_log` con magic 8882028 y `trade_result {executed: false, mode:
+"alert"}`. No hay ruta de auto-execute ni de trail: este perfil es SOLO alerta
+(`api/services/vwap_alert_service.py`).
 
 Sobre el orden de las rutas literales
 -------------------------------------
@@ -63,4 +78,4 @@ Sobre el orden de las rutas literales
 registro. Lo mismo con `/api/analysis/chartism/{symbol}` frente a `/{symbol}`.
 """
 
-__all__ = ["agent", "cta", "health", "journal", "macro", "market", "orderflow", "setup", "trading", "watcher"]
+__all__ = ["agent", "cta", "health", "journal", "macro", "market", "orderflow", "setup", "trading", "vwap", "watcher"]

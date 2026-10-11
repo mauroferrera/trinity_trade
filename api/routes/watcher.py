@@ -1,11 +1,15 @@
 """El watcher por HTTP: qué se vigila, un escaneo y por qué no hay auto-ejecución.
 
-Tres rutas
-----------
+Cuatro cosas
+------------
 - `GET  /api/watcher/status`: configuración y estado vigente. Lectura.
 - `POST /api/watcher/scan`: un ciclo de evaluación y auditoría. **No manda órdenes.**
 - `POST /api/watcher/auto-execute`: `501`. Existe para que el interruptor del panel
   tenga una respuesta honesta en vez de un `404` que parece un bug, y dice por qué.
+- Y el bucle en segundo plano (F6, D-081):
+  `GET /api/watcher/loop/status` · `POST /api/watcher/loop/start` ·
+  `POST /api/watcher/loop/stop`. Opt-in: por defecto la app no arranca ninguna tarea;
+  se enciende con `watcher.background_loop: true` en el YAML o con `start` desde aquí.
 
 Por qué el 501 y no un 200 con `{"ok": false}`
 ---------------------------------------------
@@ -15,9 +19,11 @@ encendió nada. El estado del interruptor tiene que venir del `GET /status`, que
 publica `auto_execute: false` siempre. Un 501 con el motivo en el cuerpo es la única
 respuesta que un panel no puede convertir en una mentira.
 
-Las tres rutas son delgadas: no hay score, ni zonas, ni dedup aquí. Eso es
+Las tres rutas del escaneo son delgadas: no hay score, ni zonas, ni dedup aquí. Eso es
 `core/setup_gate.py`, `core/setup_lifecycle.py` y `api/services/watcher_service.py`. Esta
-capa solo traduce, cablea puertos y elige el código de salida.
+capa solo traduce, cablea puertos y elige el código de salida. Las rutas del bucle son
+todavía más delgadas: `Runtime.watcher_loop()` ya lleva el `escanear` enchufado, y aquí
+solo se traduce un botón en `arrancar()`/`parar()` y un panel en `estado()`.
 """
 
 from __future__ import annotations
@@ -126,6 +132,54 @@ def watcher_auto_execute(
             "encender la bandera sin él solo haría que el panel mienta."
         ),
     })
+
+
+def _bucle(rt: Any) -> Any:
+    """El `WatcherLoop` de esta app. El servicio dedup del bucle es el mismo que el
+    de `POST /scan`: `scans` de `estado()` y una duplicación manual no comparten
+    tarea ni nada, así que la idempotencia de `arrancar()`/`parar()` vive en el loop.
+    """
+    return rt.watcher_loop()
+
+
+@router.get("/api/watcher/loop/status", response_model=None)
+def watcher_loop_status(rt: Any = Depends(deps.runtime)) -> Dict[str, Any]:
+    """Estado del bucle en segundo plano (F6, D-081): corre, cuándo y cuánto.
+
+    Lectura sin token. `running` es la fuente de verdad de "¿corre ahora?"; `auto_start`
+    dice si el YAML lo encendería (y `auto_start_key` qué key es), porque un bucle
+    detenido por estar apagado de fábrica y uno detenido a mano se leen distinto en un
+    panel. Sin base de datos ni mercado responde igual: `estado()` no necesita ninguno.
+    """
+    return _bucle(rt).estado()
+
+
+@router.post("/api/watcher/loop/start", response_model=None)
+async def watcher_loop_start(
+    rt: Any = Depends(deps.runtime),
+    _auth: None = Depends(deps.require_api_token),
+) -> Dict[str, Any]:
+    """Arranca el bucle ahora (si no corre ya). **No lo enciende para siempre.**
+
+    La tarea del bucle vive en este proceso: apagada la app, se va. Que el bucle
+    arranque junto con la app en el futuro es el flag `watcher.background_loop` del
+    YAML, no esta ruta. `ya_corria` distingue el `start` repetido del primero.
+
+    Escribe de verdad (crea una tarea), así que es una escritura y pide token.
+    """
+    return await _bucle(rt).arrancar()
+
+
+@router.post("/api/watcher/loop/stop", response_model=None)
+async def watcher_loop_stop(
+    rt: Any = Depends(deps.runtime),
+    _auth: None = Depends(deps.require_api_token),
+) -> Dict[str, Any]:
+    """Para el bucle (si corre). Idempotente: parar dos veces devuelve igual.
+
+    Escritura (cancela la tarea): pide token.
+    """
+    return await _bucle(rt).parar()
 
 
 __all__ = ["AutoExecuteBody", "router"]

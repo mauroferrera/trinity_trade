@@ -72,6 +72,8 @@ class Runtime:
         "execution",
         "watcher",
         "cta",
+        "vwap",
+        "wloop",
         "_deps",
         "_store_backend",
     )
@@ -90,6 +92,8 @@ class Runtime:
         execution: Optional[Any] = None,
         watcher: Optional[Any] = None,
         cta: Optional[Any] = None,
+        vwap: Optional[Any] = None,
+        wloop: Optional[Any] = None,
     ) -> None:
         from agent.ports import AgentDeps
 
@@ -117,6 +121,14 @@ class Runtime:
         #: Servicio del CTA en alerta (F4, D-077). Mismo trato que el watcher: lazy y
         #: compartido, porque deduplica las alertas D1 en memoria. Ver `cta_service()`.
         self.cta = cta
+        #: Servicio del MR VWAP en alerta (F6, D-080). Mismo trato: lazy y compartido,
+        #: porque deduplica las alertas D1 en memoria. Ver `vwap_service()`. A
+        #: diferencia del CTA no tiene puerto de ejecución: es SOLO alerta.
+        self.vwap = vwap
+        #: Bucle en segundo plano del watcher (F6, D-081). Opcional y opt-in: nada
+        #: aquí lo arranca salvo el flag `watcher.background_loop` en el YAML (o
+        #: `POST /api/watcher/loop/start`). Ver `watcher_loop()`.
+        self.wloop = wloop
         self._store_backend = "inyectado" if store is not None else None
         # El agente se construye una vez y se comparte: sus anclajes entre
         # llamadas (`AnalysisAnchors`) viven aquí, no en un global.
@@ -238,6 +250,69 @@ class Runtime:
             )
         return self.cta
 
+    def vwap_service(self) -> Any:
+        """El `VwapAlertService` de ESTA app, construido una vez.
+
+        Mismo motivo que `cta_service()`: deduplica las alertas D1 **en memoria** por
+        (símbolo, barra de señal). Si cada petición construyera su servicio, esa
+        memoria moriría con el `return` y la misma barra reescribiría su fila de
+        `setup_log` en cada llamada. Se construye en el primer uso, no en el arranque:
+        `import Runtime` no toca la config, y el MR VWAP no hace nada solo.
+
+        A diferencia del CTA NO inyecta puerto de ejecución: F6 es SOLO alerta
+        (`AUTO_EJECUCION_DISPONIBLE` en el servicio). La ejecución de esta estrategia,
+        si llega, será otra fase con su convalidación en vivo delante.
+
+        Si alguien cambia el mercado con `set_market`, el servicio se descarta (igual
+        que los otros): escanear contra un mercado que ya no está conectado daría
+        `error` en cada símbolo haciéndose el vivo; se prefiere perder la memoria de
+        dedup a mirar el sitio equivocado.
+        """
+        if self.vwap is None:
+            from .services.vwap_alert_service import VwapAlertService
+
+            self.vwap = VwapAlertService(
+                market=self.market,
+                store=self.store,
+            )
+        return self.vwap
+
+    def watcher_loop(self) -> Any:
+        """El `WatcherLoop` de ESTA app, construido una vez.
+
+        El bucle queda enchufado a `watcher_service().escanear`, y se construye con
+        dos `lambda` para que `import Runtime` no lea la config ni cree tareas.
+        Construirlo (y por tanto `Runtime.app` o `Runtime.watcher_loop()`) NO arranca
+        nada: el arranque de la tarea solo lo decide el lifespan (flag
+        `watcher.background_loop` en el YAML) o `POST /api/watcher/loop/start`.
+        """
+        if self.wloop is None:
+            from .services.watcher_loop import WatcherLoop
+
+            def _escanear() -> Dict[str, Any]:
+                return self.watcher_service().escanear()
+
+            self.wloop = WatcherLoop(_escanear)
+        return self.wloop
+
+    async def _autostart_watcher_loop(self) -> None:
+        """Arranca el bucle del watcher si `watcher.background_loop` lo pide.
+
+        Es el ÚNICO sitio que crea una tarea del bucle sin que la pidan: el flag del
+        YAML (revisable, no una ruta) lo enciende. Si la lectura falla, la app
+        arranca igual con el bucle apagado: no se decide el arranque de la app en
+        función de un botón de operación.
+        """
+        try:
+            from .services import watcher_loop  # noqa: PLC0415 - tardío
+
+            autostart = watcher_loop.autoarranque_configurado()
+        except Exception as exc:  # noqa: BLE001 - ver docstring
+            log.warning("no se pudo decidir el autostart del bucle del watcher: %s", exc)
+            autostart = False
+        if autostart:
+            await self.watcher_loop().arrancar()
+
     def set_market(self, market: Any) -> None:
         """Cambia el mercado y actualiza los `AgentDeps` sin recrearlos.
 
@@ -252,6 +327,8 @@ class Runtime:
         self.symbols = market
         self.watcher = None
         self.cta = None
+        self.vwap = None
+        self.wloop = None
         self._deps.market = market
 
     # -- ciclo de vida -----------------------------------------------------------
@@ -262,11 +339,14 @@ class Runtime:
         - engancha el loop al gestor de WebSockets: `emit()` desde el hilo de MT5
           depende de esto, y sin loop un `emit` cuenta un drop en vez de fallar
           en silencio;
-        - deja la base inicializada (una sola vez; `init_db` es idempotente).
+        - deja la base inicializada (una sola vez; `init_db` es idempotente);
+        - arranca el bucle del watcher SOLO si el YAML lo pide (`background_loop:
+          true`): opt-in y revisable en un fichero, ver `watcher_loop()`.
         """
         import asyncio
 
         self.ws.attach_loop(asyncio.get_running_loop())
+        await self._autostart_watcher_loop()
         if self.store is not None and self._store_backend is None:
             try:
                 self.store.init_db()
@@ -285,6 +365,12 @@ class Runtime:
 
     async def shutdown(self) -> None:
         """Apaga lo que se encendió. Idempotente."""
+        bucle = self.wloop
+        if bucle is not None:
+            try:
+                await bucle.parar()
+            except Exception as exc:  # noqa: BLE001 - apagar no puede fallar el apagado
+                log.warning("parando el bucle del watcher: %s", exc)
         for pieza, nombre in ((self.orderflow, "orderflow"), (self.ws, "ws")):
             stop = getattr(pieza, "stop", None)
             if callable(stop):

@@ -184,7 +184,7 @@ class TestSeamDeConfiguracion:
         """
         source = store._LazyStrategyConfig()
 
-        assert source.strategy_map() == {8882026: "default", 8882027: "cta"}
+        assert source.strategy_map() == {8882026: "default", 8882027: "cta", 8882028: "vwap"}
 
     def test_get_strategy_map_delega_en_el_seam(self, db):
         store.get_config_source().mapa = {8882026: "default", 9999001: "cta"}

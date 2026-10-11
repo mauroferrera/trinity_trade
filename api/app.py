@@ -36,16 +36,24 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import errors
 from .deps import ALLOWED_ORIGINS_ENV, origins
-from .routes import agent, cta, health, journal, macro, market, orderflow, setup, trading, watcher
+from .routes import agent, cta, health, journal, macro, market, orderflow, setup, trading, vwap, watcher
 from .runtime import Runtime
+
+#: Carga `.env` de la raíz del proyecto una sola vez al importar la app. Sin esto
+#: el proceso solo ve variables de entorno reales y un `.env` completo (el que pide
+#: el Quickstart) queda ignorado: el chat del agente responde "no hay claves de API".
+#: `override=False` para no pisar variables ya definidas en el entorno real.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 #: Título y versión. La versión va en el título porque es la forma más barata de
 #: saber qué build tiene abierto un dashboard cuando alguien reporta un fallo.
@@ -94,7 +102,7 @@ def create_app(runtime: Optional[Runtime] = None) -> FastAPI:
     _instala_cors(app)
     _instala_tiempos(app)
 
-    for modulo in (health, market, agent, journal, orderflow, macro, setup, trading, watcher, cta):
+    for modulo in (health, market, agent, journal, orderflow, macro, setup, trading, watcher, cta, vwap):
         app.include_router(modulo.router)
 
     _monta_estaticos(app)

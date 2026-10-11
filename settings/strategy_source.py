@@ -138,6 +138,27 @@ def get_watcher_config() -> Dict[str, Any]:
     return load().get("watcher_config", {})
 
 
+def get_watcher_section() -> Dict[str, Any]:
+    """La sección `watcher` CRUDA del YAML (la plana no la conoce).
+
+    El schema plano de `core.strategy` (`_parse_watcher`) solo deja pasar las claves
+    del watcher que son reglas (enabled, interval, dedup, symbols); `background_loop`,
+    el interruptor opt-in del bucle de fondo (F6, D-081), es un botón de operación y
+    no una regla de trading, así que no vive en el schema. Este seam devuelve la
+    sección tal y como está en el fichero para que `api/services/watcher_loop.py`
+    lea ese botón sin que `core/` tenga que saber de bucles.
+    """
+    doc = _doc_actual()
+    seccion = (doc or {}).get("watcher") or {}
+    return dict(seccion) if isinstance(seccion, dict) else {}
+
+
+def _doc_actual() -> Dict[str, Any]:
+    """El documento jerárquico del YAML (reciente o recién leído)."""
+    load()
+    return dict(_cache.get("doc") or {})
+
+
 def get_agent_topics() -> Dict[str, Any]:
     return load().get("agent_topics", {})
 

@@ -92,6 +92,12 @@ watcher:
   enabled: true
   scan_interval_sec: 30
   auto_execute: false
+  # background_loop: el bucle en segundo plano (F6, D-081) repite watcher.scan cada
+  # scan_interval_sec y audita, sin ejecutar. APAGADO de fábrica: la app no arranca
+  # el bucle solo; se enciende aquí (y se revisa en un fichero, no en una ruta) o a
+  # mano con POST /api/watcher/loop/start. La key no es del schema plano de
+  # core/strategy: es un botón de operación, no una regla de trading.
+  background_loop: false
   dedup_ttl_sec: 900
   symbols:
   - symbol: EURUSD

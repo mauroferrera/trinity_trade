@@ -1,0 +1,45 @@
+# Perfil del Mean Reversion a VWAP (F6, D-080): la estrategia convalidada en F3
+# (D-075/D-079) con su magic, sus símbolos y su motor. Fichero aparte de strategy.yaml
+# y de strategy_cta.yaml porque es OTRA estrategia, con OTRA pata del sistema
+# multi-estrategia (D-071): en régimen de RANGO (compresión) el edge es contrarian
+# (precio estirado al extremo de la banda → vuelve al VWAP), no trend-following.
+#
+# El servicio (api/services/vwap_alert_service.py) es el único consumidor. Si el
+# fichero no existe, el perfil sale vacío y el servicio queda deshabilitado CON
+# MOTIVO; si está mal formado, settings/strategy_vwap_source.py lanza
+# StrategyConfigError (un default silencioso aquí encendería una estrategia que nadie
+# configuró).
+#
+# Los parámetros del engine son los convalidados en F3 SIN recalibrar (D-065/D-075):
+# VWAP rolling 20 barras sobre precio típico ponderado por tick_volume, bandas ±2·ATR
+# (ATR Wilder 14), stop 2·ATR, techo temporal 10 barras D1.
+#
+# El GATE de régimen (el interruptor de F3) NO es un parámetro del motor: el servicio
+# solo alerta cuando core.risk_engine.regime() == "rango" (D-079). regime_lookback es
+# la ventana del percentil de ATR% que decide ese gate; por eso `bars` pide 260: la
+# clasificación necesita su historia completa (REGIME_PCT_WINDOW = 250).
+#
+# auto_execute: F6 es SOLO alerta. El MR VWAP no ejecuta (no hay trailing que
+# mantener ni camino de orden convalidado en vivo): evalúa, escribe su fila en
+# setup_log y NO manda órdenes. La ejecución, si llega, será otra fase con su
+# convalidación en vivo delante.
+
+enabled: true
+magic: 8882028
+comment: "Trinity MR VWAP D1"
+timeframe: D1
+bars: 260
+symbols:
+  - EURUSD
+  - XAUUSD
+  - US500
+  - GBPUSD
+  - AUDUSD
+auto_execute: false
+engine:
+  atr_n: 14
+  vwap_n: 20
+  k_bands: 2.0
+  sl_k: 2.0
+  max_hold: 10
+  regime_lookback: 250

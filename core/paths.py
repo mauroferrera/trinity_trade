@@ -56,6 +56,14 @@ STRATEGY_CTA_PATH = os.environ.get(
     "STRATEGY_CTA_PATH", os.path.join(CONFIG_DIR, "strategy_cta.yaml")
 )
 
+# strategy_vwap.yaml -> perfil propio del Mean Reversion a VWAP (F6, D-080). Mismo
+# patrón otra vez: la segunda estrategia convalidada (F3) necesita su fichero porque
+# sus reglas no se parecen a las del CTA (revierte a la media en rango, no sigue
+# tendencia) y su lector es settings/strategy_vwap_source.py, hermano de los otros.
+STRATEGY_VWAP_PATH = os.environ.get(
+    "STRATEGY_VWAP_PATH", os.path.join(CONFIG_DIR, "strategy_vwap.yaml")
+)
+
 # --- Persistencia ------------------------------------------------------------
 
 # El activo más valioso del proyecto: de aquí salen el post-mortem, los win-rate

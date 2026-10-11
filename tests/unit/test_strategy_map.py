@@ -65,7 +65,7 @@ class TestParseMap:
             doc = yaml.safe_load(fh) or {}
         mapa = strategy_map.parse_map(doc)
 
-        assert mapa == {8882026: "default", 8882027: "cta"}
+        assert mapa == {8882026: "default", 8882027: "cta", 8882028: "vwap"}
 
     def test_acepta_el_mapeo_pelado(self) -> None:
         assert strategy_map.parse_map({8882026: "default", 9999001: "cta"}) == MAPA_CTA
