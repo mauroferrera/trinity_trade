@@ -12,8 +12,9 @@ se sobreescriben con estos defaults si faltan.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, time as dtime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Pesos por defecto, en puntos. El score es sum(valor*peso)/total*100, así que un
 # peso > 0 sobre un componente SIN DATO no es neutro: es una reserva de puntuación
@@ -69,6 +70,49 @@ REGIME_EXPANSION = "expansion"
 REGIME_RANGO = "rango"
 REGIME_NEUTRAL = "neutro"
 
+# --- Clasificador de régimen (D-079) -----------------------------------------
+#
+# La heurística original (ratio span/cuerpo_medio con cortes fijos 6.0/3.0)
+# clasificaba "expansion" el 100% de las barras en D1 y M15: el ratio p50
+# observado era ~15, lejos de ambos cortes, así que el gate
+# compresión→VWAP de D-071 nunca se abrió (MEJORAS_MR_VWAP.md §3). La deuda
+# estaba documentada: los cortes nunca se validaron contra datos reales.
+#
+# Dos medidas con semántica propia los sustituyen:
+#
+#   - Percentil del ATR% dentro de su propia historia: la compresión es
+#     RELATIVA a lo reciente del mismo activo/marco temporal, sin umbral
+#     absoluto que haya que recalibrar por mercado. Reparte la serie por
+#     construcción en ~20% compresión / ~60% neutro / ~20% expansión.
+#   - Exponente de Hurst sobre los retornos: persistencia (H>0.5, tendencia)
+#     vs antipersistencia (H<0.5, reversión). Un "rango" con H alto es una
+#     tendencia de baja volatilidad, no la acumulación que busca la
+#     reversión a la media; y una expansión con H bajo es ruido caro.
+#
+# Umbrales fijados ANTES de ver el resultado de la re-convalidación F3
+# (D-065): se convalidan contra datos, no se ajustan contra el PnL de MR.
+REGIME_PCT_WINDOW = 250     # historia del percentil de ATR% (~1 año D1)
+REGIME_P_RANGO = 20.0       # percentil <= éste => compresión
+REGIME_P_EXPANSION = 80.0   # percentil >= éste => expansión
+REGIME_ATR_N = 14           # ventana del ATR media (misma cadencia que F2)
+REGIME_MIN_BARS = 60        # historia mínima para clasificar (antes 5)
+REGIME_HURST_WINDOW = 252   # retornos máximos para estimar H (~1 año D1)
+REGIME_HURST_MIN = 128      # retornos mínimos; por debajo H = None
+#
+# Cortes de Hurst calibrados contra la DISTRIBUCIÓN NULA del propio
+# estimador, no contra el resultado de ninguna estrategia: 300 series RW
+# semilladas de 252 retornos dan para R/S p10=0.447, mediana=0.573,
+# p95=0.727 (el R/S de muestra tiene sesgo +0.07 a esta escala). Cortes a
+# 0.45/0.70 => 10.3% de falsos "antipersistentes" y 8.3% de falsos
+# "persistentes" sobre ruido, con potencia 82%/92% sobre AR(1)
+# rho=-0.8/+0.8; con 0.55/0.60 (los del primer borrador) el ruido solo
+# habría colapsado la banda "neutro". Medido en
+# research/regime_scan.py --null, antes de mirar el PnL de MR (D-065).
+REGIME_HURST_LO = 0.45      # H <= éste => etiqueta "antipersistente" (diagnóstico)
+REGIME_HURST_HI = 0.70      # H >= éste => tendencia fuerte: fuerza expansion y
+                            #             excluye de rango (la única guardia
+                            #             de Hurst en la decisión, D-079)
+
 
 def _h_as_min(t: dtime) -> int:
     return t.hour * 60 + t.minute
@@ -123,13 +167,159 @@ def killzone_score(windows: Optional[List[Dict[str, str]]] = None,
     }
 
 
+def _true_ranges(win: List[Dict[str, Any]]) -> List[float]:
+    """Rango verdadero barra a barra; el primero usa open como cierre previo."""
+    trs: List[float] = []
+    prev_close: Optional[float] = None
+    for c in win:
+        h, l = c["high"], c["low"]
+        pc = prev_close if prev_close is not None else c["open"]
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+        prev_close = c["close"]
+    return trs
+
+
+def _atr_pct_series(win: List[Dict[str, Any]],
+                    n: int = REGIME_ATR_N) -> List[Optional[float]]:
+    """ATR medio de los últimos `n` rangos verdaderos dividido por el close.
+
+    Media simple y NO Wilder: aquí no se convalida el ATR de F2, se mide la
+    compresión RELATIVA de la serie. La media simple da el mismo peso a
+    cada barra de la ventana; Wilder pondera lo reciente y sesgaría el
+    percentil hacia la barra actual, que es justo la que se está juzgando.
+
+    Devuelve None en la posición i si el close no es positivo (no hay
+    porcentaje que calcular y no se inventa uno).
+    """
+    trs = _true_ranges(win)
+    out: List[Optional[float]] = []
+    for i in range(len(win)):
+        seg = trs[max(0, i - n + 1):i + 1]
+        close = win[i]["close"]
+        out.append((sum(seg) / len(seg) / close) if close and close > 0 else None)
+    return out
+
+
+def _percentile_rank(values: List[float], current: float) -> float:
+    """Percentil de `current` dentro de `values` (empates: media de rangos).
+
+    Una serie plana (mismo ATR% siempre) devuelve 50 y cae a "neutro": sin
+    dispersión no hay compresión relativa que señalar, y sobre una serie
+    constante cualquier "rango" o "expansión" sería un artefacto del corte.
+    """
+    if not values:
+        return 50.0
+    below = sum(1 for v in values if v < current)
+    equal = sum(1 for v in values if v == current)
+    return (below + 0.5 * equal) / len(values) * 100.0
+
+
+def hurst_exponent(closes: Optional[List[float]] = None,
+                   window: int = REGIME_HURST_WINDOW,
+                   min_returns: int = REGIME_HURST_MIN) -> Optional[float]:
+    """Exponente de Hurst por R/S modificado.
+
+    Pendiente de la recta log(R/S) vs log(n) sobre subseries de
+    n en {16, 32, 64, 128} retornos: H > 0.5 persistencia (tendencia),
+    H < 0.5 antipersistencia (reversión), H ~ 0.5 ruido browniano.
+
+    Puro y determinista (sin numpy, sin aleatoriedad): la misma serie da
+    siempre el mismo H, condición para testearlo con aritmética de lápiz y
+    para que el panel no cambie de respuesta entre dos consultas iguales.
+
+    Devuelve None con menos de `min_returns` retornos (o con un close no
+    positivo, donde el log no existe): un H estimado sobre menos de eso es
+    ruido, y clasificar con ruido es peor que no clasificar. El caller cae
+    a la regla solo-percentil y lo declara en el detalle.
+    """
+    cs = list(closes or [])[-(window + 1):]
+    if len(cs) < min_returns + 1:
+        return None
+    rets: List[float] = []
+    for a, b in zip(cs, cs[1:]):
+        if a <= 0 or b <= 0:
+            return None
+        rets.append(math.log(b / a))
+
+    points: List[Tuple[float, float]] = []
+    for n in (16, 32, 64, 128):
+        if len(rets) < 2 * n:
+            continue  # hace falta al menos una subserie completa de reserva
+        rs_vals: List[float] = []
+        for start in range(0, len(rets) - n + 1, n):
+            chunk = rets[start:start + n]
+            mean = sum(chunk) / n
+            acc = 0.0
+            mn = mx = 0.0
+            for k, r in enumerate(chunk):
+                acc += r - mean
+                if k == 0:
+                    mn = mx = acc
+                else:
+                    mn = min(mn, acc)
+                    mx = max(mx, acc)
+            var = sum((r - mean) ** 2 for r in chunk) / n
+            if var > 0 and mx > mn:
+                rs_vals.append((mx - mn) / math.sqrt(var))
+        if rs_vals:
+            points.append((math.log(n), math.log(sum(rs_vals) / len(rs_vals))))
+
+    if len(points) < 2:
+        return None
+    # Mínimos cuadrados de log(R/S) sobre log(n): la pendiente ES el Hurst.
+    count = len(points)
+    mean_x = sum(x for x, _ in points) / count
+    mean_y = sum(y for _, y in points) / count
+    sxx = sum((x - mean_x) ** 2 for x, _ in points)
+    if sxx <= 0:
+        return None
+    sxy = sum((x - mean_x) * (y - mean_y) for x, y in points)
+    return sxy / sxx
+
+
+def _hurst_class(h: Optional[float]) -> Optional[str]:
+    """Etiqueta legible de H con los MISMOS cortes que usa la regla."""
+    if h is None:
+        return None
+    if h <= REGIME_HURST_LO:
+        return "antipersistente"
+    if h >= REGIME_HURST_HI:
+        return "persistente"
+    return "no_concluyente"
+
+
 def regime(candles: Optional[List[Dict[str, Any]]] = None,
-           lookback: int = 60) -> Dict[str, Any]:
+           lookback: int = REGIME_PCT_WINDOW,
+           hurst_window: int = REGIME_HURST_WINDOW) -> Dict[str, Any]:
     """Clasifica el mercado en expansion / rango / neutro.
 
-    Heuristica determinista: el ratio entre el rango total de la ventana y el
-    tamano medio de los cuerpos. Ratios altos sugieren expansio/direccionalidad;
-    bajos sugieren compresion/acumulacion.
+    Medida actual (D-079), sustituye al ratio span/cuerpo con cortes fijos
+    6.0/3.0 que nunca se validaron contra datos reales:
+
+      1. Percentil del ATR% de la última barra dentro de los últimos
+         `lookback` valores: <= REGIME_P_RANGO compresión, >=
+         REGIME_P_EXPANSION expansión.
+      2. Hurst sobre hasta `hurst_window` cierres como guardia de
+         tendencia: >= REGIME_HURST_HI fuerza "expansion" aunque la vol
+         esté a la baja, y EXCLUYE de "rango" (una compresión con
+         tendencia persistente no es revertible: se fada una tendencia).
+         <= REGIME_HURST_LO solo etiqueta el diagnóstico ("antipersistente").
+
+    Por qué la guardia de tendencia y no un segundo filtro de rango: el
+    AND "percentil<=20 y H<=0.45" dejó "rango" en el 2.1% de las señales
+    MR (regime_scan: el H<=0.45 solo cumple el 6.2% de las ventanas
+    reales) y el fallback de estado retrasado tampoco rescata (2.5%) —
+    ambos por debajo del criterio de no-degeneración <5% registrado antes
+    de mirar resultados. Con la guardia, "rango" es compresión que no
+    esté en tendencia fuerte (~31% de las señales, régimen sano).
+
+    Degradación documentada: con menos de REGIME_MIN_BARS, con series no
+    positivas o sin dispersión → "neutro" (sin datos no se clasifica: un
+    estado inventado gatea en falso). Si Hurst no tiene historia (None),
+    decide solo el percentil y el detalle lo dice.
+
+    `ratio`, `span` y `avg_body` se siguen devolviendo como diagnóstico
+    (backtest_mr los registra en cada trade), pero ya NO deciden.
     """
     cs = candles or []
     if not cs:
@@ -137,6 +327,12 @@ def regime(candles: Optional[List[Dict[str, Any]]] = None,
     win = cs[-lookback:]
     if len(win) < 5:
         return {"regime": REGIME_NEUTRAL, "detail": "Velas insuficientes."}
+    if len(win) < REGIME_MIN_BARS:
+        return {
+            "regime": REGIME_NEUTRAL,
+            "detail": (f"Solo {len(win)} barras: el percentil necesita "
+                       f"{REGIME_MIN_BARS}."),
+        }
 
     hi = max(c["high"] for c in win)
     lo = min(c["low"] for c in win)
@@ -150,12 +346,37 @@ def regime(candles: Optional[List[Dict[str, Any]]] = None,
         return {"regime": REGIME_NEUTRAL, "detail": "Rango o cuerpo nulos (insuficiente)."}
 
     ratio = span / avg_body
-    if ratio >= 6.0:
-        reg = REGIME_EXPANSION
-    elif ratio <= 3.0:
+
+    atr_pct_s = _atr_pct_series(win)
+    valid = [v for v in atr_pct_s if v is not None]
+    current = atr_pct_s[-1]
+    if current is None or len(valid) < REGIME_MIN_BARS:
+        return {
+            "regime": REGIME_NEUTRAL,
+            "detail": "Serie de ATR% incompleta (cierres no positivos).",
+            "span": round(span, 6),
+            "ratio": round(ratio, 2),
+            "avg_body": round(avg_body, 6),
+        }
+
+    pct = _percentile_rank(valid, current)
+    h = hurst_exponent([c["close"] for c in cs], window=hurst_window)
+    h_class = _hurst_class(h)
+
+    if pct <= REGIME_P_RANGO and (h is None or h < REGIME_HURST_HI):
         reg = REGIME_RANGO
+    elif pct >= REGIME_P_EXPANSION or (h is not None and h >= REGIME_HURST_HI):
+        reg = REGIME_EXPANSION
     else:
         reg = REGIME_NEUTRAL
+
+    if h is None:
+        h_detail = "Hurst sin historia suficiente (decide solo el percentil)"
+    else:
+        h_detail = f"Hurst {h:.3f} ({h_class})"
+    detail = (f"ATR% percentil {pct:.1f} (compresión<={REGIME_P_RANGO:g}, "
+              f"expansión>={REGIME_P_EXPANSION:g}) · {h_detail} → {reg}; "
+              f"ratio legado {ratio:.2f}.")
 
     return {
         "regime": reg,
@@ -163,7 +384,11 @@ def regime(candles: Optional[List[Dict[str, Any]]] = None,
         "ratio": round(ratio, 2),
         "avg_body": round(avg_body, 6),
         "atr_pct": round(avg_wick / close_last * 100.0, 3) if close_last else 0.0,
-        "detail": f"Rango/body = {ratio:.2f} ({reg}); ATR aproximado {avg_wick / close_last * 100:.2f}%.",
+        "vol_percentile": round(pct, 2),
+        "hurst": round(h, 4) if h is not None else None,
+        "hurst_class": h_class,
+        "lookback_used": len(win),
+        "detail": detail,
     }
 
 

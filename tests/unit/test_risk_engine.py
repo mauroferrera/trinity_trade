@@ -8,7 +8,10 @@ Run:  python -m pytest tests/unit/test_risk_engine.py -v
 
 from __future__ import annotations
 
+import json
+import random
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -237,12 +240,65 @@ class TestSmcComponent:
 # Component: regime
 # ---------------------------------------------------------------------------
 
+_FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
+
+
+@pytest.fixture(scope="module")
+def regime_samples():
+    """Ventanas reales D1 congeladas por research/regime_scan.py (D-079)."""
+    with open(_FIXTURES_DIR / "regime_d1_samples.json",
+              encoding="utf-8") as fh:
+        return json.load(fh)
+
+
 class TestRegime:
-    def test_expansion(self):
-        """Large range vs small bodies = expansion."""
-        candles = make_candles(base_price=1.1000, count=10, bias="bullish", spread=0.001, seed_increment=0.0005)
-        r = re_mod.regime(candles)
-        assert r["regime"] in ("expansion", "rango", "neutro")  # just verify it runs
+    """D-076: los TRES estados con datos reales D1, más sus degradaciones.
+
+    El fixture (tests/fixtures/regime_d1_samples.json) son ventanas reales
+    de 253 barras D1 congeladas por research/regime_scan.py con los
+    parámetros D-079. Si alguien recalibra el régimen, estos tests fallan
+    a propósito y obligan a re-exportar el fixture y reconsiderar el cambio
+    (no a olvidar qué se prometió).
+    """
+
+    @pytest.mark.parametrize("estado", ["rango", "neutro", "expansion"])
+    def test_estado_real_d1(self, regime_samples, estado):
+        """La ventana real D1 congelada reproduce su estado y su diagnóstico."""
+        s = regime_samples[estado]
+        r = re_mod.regime(s["candles"])
+        assert r["regime"] == estado
+        assert r["vol_percentile"] == pytest.approx(
+            s["vol_percentile"], abs=0.02)
+        if s.get("hurst") is not None:
+            assert r["hurst"] == pytest.approx(s["hurst"], abs=0.002)
+        # Diagnóstico legado que backtest_mr loguea en cada trade (F3).
+        assert "ratio" in r and "detail" in r
+        assert r["lookback_used"] == re_mod.REGIME_PCT_WINDOW
+
+    def test_rango_real_es_compresion_sin_tendencia(self, regime_samples):
+        """'rango' real cumple la regla D-079: percentil bajo y sin tendencia."""
+        r = re_mod.regime(regime_samples["rango"]["candles"])
+        assert r["vol_percentile"] <= re_mod.REGIME_P_RANGO
+        assert r["hurst"] is None or r["hurst"] < re_mod.REGIME_HURST_HI
+
+    def test_expansion_real_cumple_la_regla(self, regime_samples):
+        """'expansion' real viene del percentil alto O de tendencia fuerte."""
+        r = re_mod.regime(regime_samples["expansion"]["candles"])
+        por_pct = r["vol_percentile"] >= re_mod.REGIME_P_EXPANSION
+        por_hurst = (r["hurst"] is not None
+                     and r["hurst"] >= re_mod.REGIME_HURST_HI)
+        assert por_pct or por_hurst
+
+    def test_neutro_real_no_cumple_ninguna(self, regime_samples):
+        r = re_mod.regime(regime_samples["neutro"]["candles"])
+        assert r["vol_percentile"] > re_mod.REGIME_P_RANGO
+        assert r["vol_percentile"] < re_mod.REGIME_P_EXPANSION
+        assert r["hurst"] is None or r["hurst"] < re_mod.REGIME_HURST_HI
+
+    def test_determinismo(self, regime_samples):
+        """Misma entrada -> misma salida (condición del panel en vivo)."""
+        candles = regime_samples["rango"]["candles"]
+        assert re_mod.regime(candles) == re_mod.regime(candles)
 
     def test_no_candles(self):
         """Empty candles = neutral."""
@@ -254,6 +310,74 @@ class TestRegime:
         candles = make_candles(count=3)
         r = re_mod.regime(candles)
         assert r["regime"] == "neutro"
+
+    def test_warmup_debajo_min_bars(self):
+        """Sin REGIME_MIN_BARS no se clasifica: neutro que lo declare."""
+        candles = make_candles(count=re_mod.REGIME_MIN_BARS - 10)
+        r = re_mod.regime(candles)
+        assert r["regime"] == "neutro"
+        assert str(re_mod.REGIME_MIN_BARS) in r["detail"]
+
+    def test_series_plana_neutro_por_empate(self):
+        """ATR% constante => percentil 50 por construcción => neutro."""
+        candles = [{"open": 100.0, "high": 101.0, "low": 99.0,
+                    "close": 100.01, "time": i}
+                   for i in range(re_mod.REGIME_MIN_BARS + 10)]
+        r = re_mod.regime(candles)
+        assert r["regime"] == "neutro"
+        assert r["vol_percentile"] == 50.0
+
+    # -- Hurst: calibración semillada contra la nula (regime_scan --null) ----
+
+    @staticmethod
+    def _rw_closes(n, seed):
+        rng = random.Random(seed)
+        px, out = 100.0, [100.0]
+        for _ in range(n):
+            px *= (1 + rng.gauss(0, 0.01))
+            out.append(px)
+        return out
+
+    @staticmethod
+    def _ar1_closes(n, seed, rho):
+        rng = random.Random(seed)
+        px, prev, out = 100.0, 0.0, [100.0]
+        for _ in range(n):
+            prev = rho * prev + rng.gauss(0, 0.01)
+            px *= (1 + prev)
+            out.append(px)
+        return out
+
+    def test_hurst_rw_dentro_de_banda_nula(self):
+        """Ruido blanco: H en la banda [0.30, 0.75] de la nula (p10/p95)."""
+        for seed in (7, 42):
+            h = re_mod.hurst_exponent(self._rw_closes(300, seed))
+            assert h is not None
+            assert 0.30 <= h <= 0.75, f"seed {seed}: H={h} fuera de banda"
+
+    def test_hurst_persistente(self):
+        """AR(1) rho=+0.9 (tendencia real) supera el corte HI con holgura."""
+        h = re_mod.hurst_exponent(self._ar1_closes(300, 11, 0.9))
+        assert h is not None and h > re_mod.REGIME_HURST_HI + 0.10
+
+    def test_hurst_antipersistente(self):
+        """AR(1) rho=-0.8 (reversión real) queda bajo el corte LO."""
+        h = re_mod.hurst_exponent(self._ar1_closes(300, 13, -0.8))
+        assert h is not None and h < re_mod.REGIME_HURST_LO
+
+    def test_hurst_sin_historia_devuelve_none(self):
+        assert re_mod.hurst_exponent(self._rw_closes(99, 7)) is None
+
+    def test_hurst_close_no_positivo_devuelve_none(self):
+        closes = [100.0, 101.0, 0.0] + [102.0] * 300
+        assert re_mod.hurst_exponent(closes) is None
+
+    def test_hurst_class_casa_con_los_cortes(self):
+        assert re_mod._hurst_class(None) is None
+        assert re_mod._hurst_class(re_mod.REGIME_HURST_LO) == "antipersistente"
+        assert re_mod._hurst_class(re_mod.REGIME_HURST_HI) == "persistente"
+        mid = (re_mod.REGIME_HURST_LO + re_mod.REGIME_HURST_HI) / 2
+        assert re_mod._hurst_class(mid) == "no_concluyente"
 
 
 # ---------------------------------------------------------------------------

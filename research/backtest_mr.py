@@ -89,7 +89,7 @@ VWAP_N = 20              # ventana del VWAP rolling (precio típico ponderado)
 K_BANDS = 2.0            # bandas ± k*ATR alrededor del VWAP
 SL_K = 2.0               # stop = SL_K*ATR de la barra de señal desde el fill
 MAX_HOLD = 10            # techo temporal en barras D1 (~2 semanas de sesiones)
-REGIME_LOOKBACK = 60     # ventana de regime() (default de core/risk_engine)
+REGIME_LOOKBACK = 250    # ventana de regime(): percentil rolling de 250 (D-079)
 TRADE_REGIME = re_mod.REGIME_RANGO  # el interruptor: solo compresión opera VWAP
 
 
